@@ -1226,7 +1226,13 @@ fn doctor() -> ExitCode {
                 report_bedrock(bedrock);
             }
             for provider in &config.providers {
-                report_gateway(provider);
+                // An entry naming AWS is reported as the Bedrock backend it reaches. Reported as a
+                // gateway it would name a credential it does not use and a chat-completions
+                // endpoint no request goes to, which is a diagnostic describing the wrong service.
+                match provider.bedrock.as_ref() {
+                    Some(bedrock) => report_bedrock(bedrock),
+                    None => report_gateway(provider),
+                }
             }
 
             // What a run would actually request, since a choice made with `/model` overrides the
@@ -1282,7 +1288,7 @@ fn report_bedrock(bedrock: &bravebot_config::bedrock::Bedrock) {
             bedrock
                 .models()
                 .iter()
-                .map(|(tier, _)| tier.display_name())
+                .map(bravebot_config::bedrock::Entry::display_name)
                 .collect::<Vec<_>>()
                 .join(", "),
         ),
@@ -1497,6 +1503,29 @@ mod tests {
             .first()
             .expect("one provider")
             .clone()
+    }
+
+    /// An entry naming AWS reaches Bedrock, and a diagnostic exists to say which service a request
+    /// goes to. Reported as a gateway it named a bearer token it never sends and a chat-completions
+    /// endpoint no request goes to, which describes a service that is not there.
+    #[test]
+    fn an_aws_entry_is_reported_as_bedrock_rather_than_as_a_gateway() {
+        let provider = configured_gateway(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "sso"},
+                "models": {"openai.gpt-5.6-sol": {"name": "GPT-5.6 Sol"}}
+            }}}"#,
+        );
+
+        let bedrock = provider
+            .bedrock
+            .as_ref()
+            .expect("an AWS entry reaches Bedrock");
+        assert_eq!(bedrock.region, "us-west-2");
+        assert!(
+            provider.env.is_empty() && provider.api_key.is_none(),
+            "an AWS entry named a bearer token, which it never sends"
+        );
     }
 
     /// A gateway's credential is a long-lived bearer token, so a diagnostic that echoed one would put
