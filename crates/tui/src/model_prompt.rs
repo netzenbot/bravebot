@@ -413,10 +413,12 @@ fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
 /// as long as the real one is off screen.
 fn window<'a>(rows: &[Row<'a>], cursor: usize, visible: usize) -> (Option<&'a str>, usize, usize) {
     let first = start(rows.len(), cursor, visible);
-    // Nothing to hold a heading over on a list two rows tall: the row under the cursor is what a
-    // person is there to read, and a heading that displaced it would leave the panel saying only
-    // whose models these are and never which.
-    if visible <= 2 {
+    // Only a list one row tall has nothing to hold a heading over: the row under the cursor is what
+    // a person is there to read, and a heading that displaced it would leave the panel saying only
+    // whose models these are and never which. Two rows is enough for both, and a terminal eight to
+    // eleven rows tall leaves the list exactly that, so giving up there is giving up on the common
+    // small window rather than on a degenerate one.
+    if visible <= 1 {
         return (None, first, visible);
     }
 
@@ -918,7 +920,8 @@ mod tests {
     /// six-row list saying the same word twice. The count has to hold at every offset, because the
     /// window a held heading is decided from and the window drawn are a row apart: only some
     /// offsets put the real heading exactly where the held one goes, which is why a test at one
-    /// offset saw nothing.
+    /// offset saw nothing. It has to hold at every list height too, since the smallest list a
+    /// heading is held over is one row of heading above one row of list.
     #[test]
     fn a_service_is_never_given_two_headings_at_once() {
         let mut roster = vec![Model::automatic()];
@@ -929,19 +932,70 @@ mod tests {
                 &format!("model-{index}"),
             ));
         }
-        let mut picker = Picker::new(roster, None);
 
-        // From the first press, which puts the cursor in the gateway's own section, to well past
-        // the offset where the list has started scrolling under it.
-        for presses in 1..=12 {
-            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
-            let output = rendered_at(&picker, 60, 14);
-            let headings = output.matches("OpenRouter").count();
-            assert_eq!(
-                headings, 1,
-                "after {presses} presses the roster has {headings} headings:\n{output}"
-            );
+        // A six-row list and the two-row one a terminal under twelve rows tall gives.
+        for height in [14, 10] {
+            let mut picker = Picker::new(roster.clone(), None);
+            // From the first press, which puts the cursor in the gateway's own section, to well
+            // past the offset where the list has started scrolling under it.
+            for presses in 1..=12 {
+                handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+                let output = rendered_at(&picker, 60, height);
+                let headings = output.matches("OpenRouter").count();
+                assert_eq!(
+                    headings, 1,
+                    "after {presses} presses on a {height}-row terminal the roster has \
+                     {headings} headings:\n{output}"
+                );
+            }
         }
+    }
+
+    /// A terminal eight to eleven rows tall leaves the list two rows, which is the size a person
+    /// running the picker in a split pane actually has. Two rows still fit a heading and the row
+    /// under the cursor, so abandoning the heading there drops the name of what answers from every
+    /// row on the panel rather than from one.
+    #[test]
+    fn a_two_row_list_still_holds_the_heading_over_the_scrolled_rows() {
+        let mut picker = Picker::new(offered(), None);
+        // Past the top of the section, so the real heading is above the window and only a held one
+        // can put the service on the screen.
+        handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+
+        // Eight rows of panel inside a ten-row terminal: search, blank, two of list, blank, keys.
+        let output = rendered_at(&picker, 60, 10);
+        let under_the_cursor = picker.chosen().expect("a model").display_name.clone();
+        assert!(
+            output.contains(t!(picker_service_brave)),
+            "no service heading on a two-row list: {output}"
+        );
+        assert!(
+            output.contains(&under_the_cursor),
+            "the cursor is off screen: {output}"
+        );
+    }
+
+    /// One row is the case where the two cannot both be drawn, and the row a person is choosing
+    /// between wins: a panel holding only the service name says nothing about which model is under
+    /// the cursor, so the arrow keys stop reporting where they have got to.
+    #[test]
+    fn a_one_row_list_keeps_the_row_under_the_cursor_rather_than_the_heading() {
+        let mut picker = Picker::new(offered(), None);
+        handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+
+        // Seven rows of panel inside a nine-row terminal leaves the list a single row.
+        let output = rendered_at(&picker, 60, 9);
+        let under_the_cursor = picker.chosen().expect("a model").display_name.clone();
+        assert!(
+            output.contains(&under_the_cursor),
+            "the cursor is off screen: {output}"
+        );
+        assert!(
+            !output.contains(t!(picker_service_brave)),
+            "a one-row list spent its only row on the heading: {output}"
+        );
     }
 
     /// Nothing on screen and no word for it reads as a picker that has broken, rather than as a

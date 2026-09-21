@@ -334,7 +334,8 @@ The picker groups its rows by service, one heading per service, in the order the
 mentions each one. The models Brave's own endpoint serves are named as a service like any other.
 A service that the roster mentions in more than one place is still one section. Where a section is
 scrolled through, its heading is held on the top line of the list, so no row on screen is without
-the name of what answers it.
+the name of what answers it. Only a list of a single row is exempt, having nowhere to put both: it
+keeps the row under the cursor.
 
 **Why.** The same name is reachable through more than one service, billed and credentialled
 differently, and which of them answers is the whole of what is being chosen between. Said once over
@@ -347,6 +348,8 @@ a gateway has.
 `verified-by: bravebot_tui::model_prompt::a_service_that_appears_twice_in_the_roster_is_still_one_section`
 `verified-by: bravebot_tui::model_prompt::a_heading_stays_above_the_rows_when_the_list_is_scrolled`
 `verified-by: bravebot_tui::model_prompt::a_service_is_never_given_two_headings_at_once`
+`verified-by: bravebot_tui::model_prompt::a_two_row_list_still_holds_the_heading_over_the_scrolled_rows`
+`verified-by: bravebot_tui::model_prompt::a_one_row_list_keeps_the_row_under_the_cursor_rather_than_the_heading`
 `verified-by: bravebot_tui::model_prompt::the_model_in_use_is_marked`
 `verified-by: bravebot_tui::model_prompt::a_premium_model_says_so`
 `verified-by: bravebot_tui::model_prompt::the_list_shows_names_a_person_reads`
