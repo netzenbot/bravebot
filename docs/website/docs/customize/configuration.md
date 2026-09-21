@@ -500,6 +500,11 @@ a checkout, which is why a file in a repository is the weaker claim.
 Variables to withhold from a program the agent runs, on top of bravebot's own credentials, which are
 withheld with no configuration at all. See [`run`](../reference/tools.md#what-a-program-is-handed).
 
+A step you approved, a hook, and a language server. Not the AWS CLI bravebot resolves a Bedrock
+credential with: bravebot's own credentials are withheld from that too, but a name you add here is
+not, because this list only ever takes a variable away and that CLI is one bravebot cannot work
+without. `AWS_PROFILE` on it would resolve the wrong account.
+
 **Names only.** A list of names can only ever take something away; a list of values here would put a
 credential in front of every command the agent starts. The list is read when the process starts, so
 editing it describes your next session.
@@ -859,6 +864,12 @@ Credentials are resolved by running the AWS CLI, which is the tool you already s
 short-lived keys that expire during a session. `aws sso logout` clears them, and it takes no option to
 narrow itself: it removes every cached token, so other tools sharing that cache need a fresh
 `aws sso login` afterwards.
+
+The CLI is started with the same two variables withheld that
+[a program bravebot runs](../reference/tools.md#what-a-program-is-handed) has withheld: it resolves an
+AWS credential and has no use for the key bravebot signs Brave's own backend with, and `aws sso login`
+goes on to open a browser. Your AWS configuration reaches it untouched, which is the whole reason it
+is run.
 
 ### The assumed context window
 

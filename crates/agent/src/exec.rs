@@ -45,7 +45,7 @@
 //!
 //! # This agent's own credentials are not handed on
 //!
-//! The environment is inherited, less the names in [`scrub`]. A person approving a run reads the
+//! The environment is inherited, less the names in [`bravebot_config::scrub`]. A person approving a run reads the
 //! binary, the argv and the directory, so a credential travelling alongside those is something they
 //! were never shown and could not have endorsed. The signing key has no use in a subprocess anyway:
 //! a program the planner chose is doing what somebody approved, not authenticating as this agent.
@@ -498,7 +498,7 @@ impl<'a> Running<'a> {
             }
             // Every step, not only the first. A credential is as reachable from the middle of a
             // pipeline as from the front, and one step spared would be the whole of the hole.
-            crate::scrub::apply(&mut command);
+            bravebot_config::scrub::apply(&mut command);
 
             let mut into = Where::Upstream;
             let mut out = if index == last {
@@ -1115,7 +1115,7 @@ pub fn start_steps(
         }
         // Every step, as in the foreground: a credential is as reachable from the middle of a
         // pipeline as from the front, and one spared would be the whole of the hole.
-        crate::scrub::apply(&mut command);
+        bravebot_config::scrub::apply(&mut command);
 
         let (out_reader, out_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;
         let (err_reader, err_writer) = std::io::pipe().map_err(|e| ExecError::Io(e.to_string()))?;

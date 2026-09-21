@@ -16,8 +16,26 @@
 //! a promise `run` already makes: `git push` needs `~/.ssh`, which needs `HOME` and `SSH_AUTH_SOCK`,
 //! and the set of programs somebody might ask for cannot be enumerated in advance, so neither can
 //! the variables they read.
+//!
+//! # Here rather than beside the turn loop
+//!
+//! Every program this process starts is one of these, not only a stage the planner asked for: a
+//! hook, a language server, and the `aws` CLI the Bedrock backend resolves a credential with. That
+//! last one is why this sits in the configuration crate. It is the one subprocess started from
+//! underneath the turn loop, by a crate the turn loop depends on, so a filter living up there is
+//! one that crate cannot reach, and the rule was kept by whichever callers happened to remember
+//! it. The names are this crate's already.
+//!
+//! # Two lists, because a person's list describes a person's program
+//!
+//! [`apply`] is for a program somebody asked for, and honours the settings list as well. A name there
+//! can only take a variable away, which is safe on a command whose whole purpose is what the person
+//! asked of it. [`apply_own_credentials`] is for one *this process* runs in order to work at all, and
+//! takes the built-in credentials only: `run.scrubEnv` naming `AWS_PROFILE` would have the Bedrock
+//! backend resolve the wrong account, and naming `PATH` would have it report the `aws` CLI as missing
+//! and send somebody to install what they already have.
 
-use bravebot_config::Settings;
+use crate::Settings;
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -40,7 +58,7 @@ pub fn names(settings: &Settings) -> Vec<String> {
     if !enabled() {
         return Vec::new();
     }
-    let mut names: Vec<String> = bravebot_config::env_var::SCRUBBED
+    let mut names: Vec<String> = crate::env_var::SCRUBBED
         .iter()
         .map(|name| (*name).to_string())
         .collect();
@@ -57,6 +75,24 @@ pub fn apply(command: &mut Command) {
     apply_from(command, settings());
 }
 
+/// Remove this agent's own credentials from `command`, and nothing else.
+///
+/// For a program *this process* decided to run rather than one the planner asked for: the `aws` CLI
+/// the Bedrock backend resolves a credential with. The settings list is deliberately not consulted
+/// there. It is a person naming what a program of *theirs* must not see, and a name on it can only
+/// ever take a variable away, which is safe for a command somebody asked for and not for one this
+/// process needs to work: `run.scrubEnv` naming `AWS_PROFILE` would resolve the wrong account, and
+/// naming `PATH` would report the CLI as not installed. The clause covers the signing key and the
+/// key id, which is what this removes.
+pub fn apply_own_credentials(command: &mut Command) {
+    if !enabled() {
+        return;
+    }
+    for name in crate::env_var::SCRUBBED {
+        command.env_remove(name);
+    }
+}
+
 /// [`apply`], against named settings rather than the file, so a test needs no ambient one.
 ///
 /// Removal rather than an empty value: a program that checks whether a variable is set would read
@@ -71,12 +107,12 @@ pub fn apply_from(command: &mut Command, settings: &Settings) {
 
 /// Whether the filtering is in force.
 ///
-/// On unless [`bravebot_config::env_var::SUBPROCESS_ENV_SCRUB`] is exactly `0`. The escape hatch is
+/// On unless [`crate::env_var::SUBPROCESS_ENV_SCRUB`] is exactly `0`. The escape hatch is
 /// deliberately hard to hit by accident: somebody who sets a variable to `false`, `no` or `off`
 /// meant to turn something off, but a credential reaching every subprocess is not a thing to
 /// switch off by near-miss, so only the one documented spelling does it.
 fn enabled() -> bool {
-    match std::env::var(bravebot_config::env_var::SUBPROCESS_ENV_SCRUB) {
+    match std::env::var(crate::env_var::SUBPROCESS_ENV_SCRUB) {
         Ok(value) => value.trim() != "0",
         Err(_) => true,
     }
@@ -127,6 +163,27 @@ mod tests {
             names.iter().any(|name| name == "SERVICES_KEY_AICHAT"),
             "naming one replaced the built-in set instead of adding to it"
         );
+    }
+
+    /// A program this process needs is not reconfigured by a list describing somebody else's.
+    ///
+    /// `run.scrubEnv` takes a variable away, which is only ever safe for a command a person asked
+    /// for. The `aws` CLI resolving a Bedrock credential is one this process cannot work without, so
+    /// a name there must not reach it: `AWS_PROFILE` on the list would resolve the wrong account,
+    /// and `PATH` would report the CLI as not installed and send somebody to install what they have.
+    #[test]
+    fn a_name_from_the_settings_file_does_not_reach_this_agents_own_subprocess() {
+        let mut command = Command::new("aws");
+        apply_own_credentials(&mut command);
+        let touched: Vec<String> = command
+            .get_envs()
+            .map(|(name, _)| name.to_string_lossy().to_string())
+            .collect();
+
+        assert!(touched.iter().any(|name| name == "SERVICES_KEY_AICHAT"));
+        // The list is not an argument here, so no value of it can be threaded in: the assertion is
+        // that the built-in two are the whole of what this touches.
+        assert_eq!(touched.len(), crate::env_var::SCRUBBED.len());
     }
 
     /// A file naming what is already built in changes nothing, and must not make the same name

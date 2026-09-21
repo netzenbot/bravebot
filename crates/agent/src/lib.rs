@@ -33,7 +33,6 @@ pub mod remembered;
 pub mod replace;
 pub mod report;
 pub mod scratch;
-pub mod scrub;
 pub mod shared;
 pub mod shell;
 pub mod skills;

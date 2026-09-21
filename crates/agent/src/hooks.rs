@@ -26,7 +26,7 @@
 //!
 //! # Nothing from the environment that a run would not get
 //!
-//! The environment is inherited less the names [`crate::scrub`] takes off, so this agent's own
+//! The environment is inherited less the names [`bravebot_config::scrub`] takes off, so this agent's own
 //! credentials do not travel into a program the person attached to a moment any more than they
 //! travel into one the planner asked for.
 
@@ -140,7 +140,7 @@ fn run(hook: &Hook, said: &str, directory: &Path, limit: Duration) -> Option<Tro
         // A hook with something to say says it the way any other program on the machine does.
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    crate::scrub::apply(&mut command);
+    bravebot_config::scrub::apply(&mut command);
 
     let mut child = match command.spawn() {
         Ok(child) => child,

@@ -20,6 +20,13 @@
 //! arrives as a separate argument rather than inside a string a shell would split. No model output
 //! and no workspace content reaches any of it, and there is no shell.
 //!
+//! What it is *not* handed is what this agent authenticates to Brave with. `aws` resolves an AWS
+//! credential and has no use for a signing key, and `aws sso login` goes on to start a browser,
+//! which is an arbitrary networked program. Those two names and no others: the person's own AWS
+//! configuration is the whole reason these commands run, and the list they can add names to is about
+//! programs of theirs rather than this one. See
+//! [`bravebot_config::scrub::apply_own_credentials`].
+//!
 //! What comes back is a credential, and it is treated as one: [`Secret`] keeps it out of a `Debug`
 //! render, and nothing logs it. It is not workspace content, so it carries no label; it never enters
 //! a turn, and the only thing it is ever used for is computing a signature.
@@ -273,16 +280,30 @@ pub fn sign_in_if_needed(
     login(profile, say)
 }
 
+/// An `aws` invocation, without this agent's own credentials in its environment.
+///
+/// Every command in this file is built here rather than from [`Command::new`] directly, so the
+/// removal is a property of the constructor instead of a line each of the three remembered. A
+/// fourth `aws` command added later gets it by having nowhere else to come from.
+fn aws(args: &[&str], profile: Option<&str>) -> Command {
+    let mut command = Command::new(AWS);
+    command.args(args);
+    if let Some(profile) = profile {
+        command.args(["--profile", profile]);
+    }
+    bravebot_config::scrub::apply_own_credentials(&mut command);
+    command
+}
+
 /// Ask the CLI for credentials, without trying to fix anything.
 fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
     // `--format process` is the documented, stable shape for exactly this: a program asking another
     // program for credentials. The alternative, `--format env`, returns shell assignments that would
     // have to be parsed as such.
-    let mut command = Command::new(AWS);
-    command.args(["configure", "export-credentials", "--format", "process"]);
-    if let Some(profile) = profile {
-        command.args(["--profile", profile]);
-    }
+    let mut command = aws(
+        &["configure", "export-credentials", "--format", "process"],
+        profile,
+    );
 
     let output = command.output().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => CredentialError::NotInstalled,
@@ -309,10 +330,8 @@ fn export(profile: Option<&str>) -> Result<Credentials, CredentialError> {
 /// Run only after something has already failed, so the check before every turn still costs one
 /// export and no more.
 fn profiles() -> Option<Vec<String>> {
-    let output = Command::new(AWS)
-        .args(["configure", "list-profiles"])
-        .output()
-        .ok()?;
+    // No profile: this asks what the CLI has, and naming one would presume the answer.
+    let output = aws(&["configure", "list-profiles"], None).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -363,13 +382,7 @@ fn login(profile: Option<&str>, mut say: impl FnMut(String)) -> Result<(), Crede
         return Err(absent);
     }
 
-    let mut command = Command::new(AWS);
-    command.args(["sso", "login"]);
-    if let Some(profile) = profile {
-        command.args(["--profile", profile]);
-    }
-
-    let mut child = command
+    let mut child = aws(&["sso", "login"], profile)
         // Both streams, because which one carries the code is the CLI's business and a person who
         // cannot see it is stuck either way.
         .stdout(Stdio::piped())
@@ -552,6 +565,97 @@ fn first_line(stderr: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What each `aws` command in this file would be handed, as `(name, value)` for whatever the
+    /// build changed. A variable left untouched is absent from this, because the child inherits it.
+    ///
+    /// Read off the built command rather than from a process that ran, so the assertions hold on a
+    /// machine with no `aws` installed and without opening a browser, which `aws sso login` does.
+    fn overrides(command: &Command) -> Vec<(String, Option<String>)> {
+        command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().to_string(),
+                    value.map(|value| value.to_string_lossy().to_string()),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether this command removes `name` from what the child inherits.
+    ///
+    /// Removal specifically, not a blank value: `aws` distinguishes an unset variable from an empty
+    /// one, so a build that set the name to `""` would leave a credential the child can still read
+    /// as "configured, to nothing" while passing a test that only checked the value was not the
+    /// secret.
+    fn withholds(command: &Command, name: &str) -> bool {
+        overrides(command)
+            .iter()
+            .any(|(found, value)| found == name && value.is_none())
+    }
+
+    /// Every `aws` command this file builds, so a test asks about all of them rather than about
+    /// whichever one it remembered. `sso login` is the one that matters most and is the one no test
+    /// can run: it opens a browser.
+    fn every_aws_command() -> Vec<(&'static str, Command)> {
+        vec![
+            (
+                "configure export-credentials",
+                aws(
+                    &["configure", "export-credentials", "--format", "process"],
+                    Some("work"),
+                ),
+            ),
+            (
+                "configure list-profiles",
+                aws(&["configure", "list-profiles"], None),
+            ),
+            ("sso login", aws(&["sso", "login"], Some("work"))),
+        ]
+    }
+
+    /// The `aws` CLI resolves an AWS credential and has no use for what this agent authenticates to
+    /// Brave with, and `aws sso login` goes on to start a browser, so the environment it inherits
+    /// reaches an arbitrary networked program. A person who configured Bedrock approved neither.
+    #[test]
+    fn the_aws_cli_is_not_handed_this_agents_own_credentials() {
+        for (which, command) in every_aws_command() {
+            // Spelled out rather than read from the list the code consults, which a test asserting
+            // the two agreed would pass on an empty one.
+            for name in ["SERVICES_KEY_AICHAT", "BRAVE_SERVICES_KEY_ID"] {
+                assert!(withholds(&command, name), "`aws {which}` was handed {name}");
+            }
+        }
+    }
+
+    /// The person's own AWS configuration is the entire reason these commands run. Withheld, the
+    /// profile the settings name cannot be resolved and the backend stops working, which is the
+    /// failure an over-broad filter produces.
+    ///
+    /// `run.scrubEnv` is where that would come from, and it is why these commands take the built-in
+    /// credentials rather than the whole withheld list: a name a person put there describes a
+    /// program of their own, and applied here `AWS_PROFILE` resolves the wrong account while `PATH`
+    /// reports the CLI as missing. Nothing in this file consults that list, so no value of it can
+    /// reach these commands and the test needs no fixture for one.
+    #[test]
+    fn the_aws_configuration_these_commands_exist_to_read_is_left_alone() {
+        for (which, command) in every_aws_command() {
+            for kept in [
+                "AWS_PROFILE",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_REGION",
+                "AWS_CONFIG_FILE",
+                "HOME",
+                "PATH",
+            ] {
+                assert!(
+                    !overrides(&command).iter().any(|(found, _)| found == kept),
+                    "`aws {which}` had {kept} changed, and it needs the one the machine has"
+                );
+            }
+        }
+    }
 
     /// No sign-in fixes a profile that is not configured: `aws sso login` fails against it for the
     /// same reason the export did, so attempting one spends a browser on a certainty and replaces

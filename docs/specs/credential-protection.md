@@ -432,7 +432,16 @@ about the profile this agent resolved for itself, which it knows, rather than ab
 That is a stronger answer than a redaction rule and it is why this clause does not restate one; what
 is owed there is the test, which scans the trail for every secret the process holds.
 
-`verified-by: none`
+**A program this agent starts for itself is covered too, and takes the built-in names only.** The
+`aws` CLI a Bedrock credential is resolved with is not a program anybody approved at a prompt, and
+the sign-in it performs goes on to open a browser. What a person listed for programs of their own is
+deliberately not applied there: that list can only ever take a variable away, which is safe for a
+command somebody asked for and not for one this process cannot work without, since a name on it could
+resolve the wrong account or report the CLI as missing.
+
+`verified-by: bravebot_bedrock::credentials::the_aws_cli_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_bedrock::credentials::the_aws_configuration_these_commands_exist_to_read_is_left_alone`
+`verified-by: bravebot_config::scrub::a_name_from_the_settings_file_does_not_reach_this_agents_own_subprocess`
 
 <a id="CRED-15"></a>
 ### CRED-15: the tree is scanned before it is vouched for
