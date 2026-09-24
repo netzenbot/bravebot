@@ -1,0 +1,44 @@
+name: probe-767
+on: push
+permissions:
+  contents: read
+env:
+  BRAVEBOT_ALLOW_UNCONFIGURED_BUILD: "1"
+jobs:
+  probe:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 3
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Build both helpers
+        run: |
+          cargo build -p bravebot-ui-files --locked
+          cp target/debug/bravebot-ui-files.exe /tmp/after.exe
+          git checkout HEAD~2 -- crates Cargo.toml Cargo.lock
+          cargo build -p bravebot-ui-files --locked
+          cp target/debug/bravebot-ui-files.exe /tmp/before.exe
+          git checkout HEAD -- crates Cargo.toml Cargo.lock
+      - name: Before and after
+        run: |
+          base="$(cygpath -u "$RUNNER_TEMP")"
+          mkdir -p "$base/project/notes" "$base/outside"
+          echo "project notes" > "$base/project/notes/todo.txt"
+          echo "outside the project" > "$base/outside/secret.txt"
+          powershell -NoProfile -Command "New-Item -ItemType Junction -Path '$(cygpath -w "$base/project/link")' -Target '$(cygpath -w "$base/outside")' | Out-Null"
+          ls -la "$base/project"
+          root="$(cygpath -w "$base/project")"
+          ask() { node -e 'const [root, path] = process.argv.slice(1); console.log(JSON.stringify({root, path, operation: "read", limit: 100}))' "$root" "$1"; }
+          for which in before after; do
+            for path in notes/todo.txt link/secret.txt 'notes/todo.txt:stream' NUL; do
+              echo "--- $which: read $path"
+              ask "$path" | "/tmp/$which.exe"
+            done
+          done
