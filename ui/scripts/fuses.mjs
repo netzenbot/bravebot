@@ -24,9 +24,9 @@ const FUSES = {
 }
 
 export const RELEASE_FUSES = {
-  RunAsNode: false,
-  EnableNodeOptionsEnvironmentVariable: false,
-  EnableNodeCliInspectArguments: false,
+  RunAsNode: true,
+  EnableNodeOptionsEnvironmentVariable: true,
+  EnableNodeCliInspectArguments: true,
   EnableEmbeddedAsarIntegrityValidation: true,
   OnlyLoadAppFromAsar: true,
 }
