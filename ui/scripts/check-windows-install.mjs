@@ -40,7 +40,8 @@ const { version } = JSON.parse(readFileSync(join(ROOT, 'ui', 'package.json'), 'u
 const INSTALL = join(process.env.LOCALAPPDATA, 'Programs', NAME)
 const APP = join(INSTALL, 'Brave Bot.exe')
 const AGENT = join(INSTALL, 'resources', 'bravebot-rpc.exe')
-const UNINSTALLER = `Uninstall ${DISPLAY_NAME}.exe`
+// electron-builder names it for the executable, not for the entry it is the uninstaller of.
+const UNINSTALLER = 'Uninstall Brave Bot.exe'
 const SHORTCUT = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${DISPLAY_NAME}.lnk`)
 const ENTRY = `HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${NAME}`
 // Electron's user data is named for `app.name`, which is the manifest's `name`.
@@ -150,7 +151,10 @@ async function install(installer) {
   const run = spawnSync(installer, ['/S'], { timeout: 300_000 })
   if (run.status !== 0) throw new Fatal(`${installer} /S exited ${run.status ?? run.signal ?? run.error?.message}`)
   if (!(await until(() => existsSync(APP) && entries().length > 0, 60))) {
-    throw new Fatal(`${installer} /S exited 0 and left no app at ${APP} with an Apps list entry`)
+    const left = existsSync(INSTALL) ? readdirSync(INSTALL).join(', ') : 'nothing'
+    throw new Fatal(
+      `${installer} /S exited 0, and ${existsSync(APP) ? 'the app is there' : `there is no ${APP}`} with ${entries().length} Apps list entries (in ${INSTALL}: ${left})`,
+    )
   }
 }
 

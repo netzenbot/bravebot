@@ -129,6 +129,8 @@ installed. It refuses a bundle for the other architecture or one that is not fus
 run on Linux, where electron-builder would need Wine. `scripts/windows-installer.test.mjs` covers
 the refusals and the names the first release fixes, and builds a real installer from a stand-in
 bundle on macOS and Windows, checking the bundle comes out byte for byte as it went in.
+`scripts/check-windows-install.mjs` installs, starts, upgrades and uninstalls the real one, in the
+account running it, so it is CI's on a runner of each architecture rather than a local check.
 
 Every macOS bundle carries the bundle id `com.brave.bravebot` and the icon `build/icon.icns`. macOS
 keys privacy grants and keychain items on the bundle id, so it does not change between releases.
