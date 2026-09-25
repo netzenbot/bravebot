@@ -1,0 +1,44 @@
+name: scratch-arm64
+on:
+  push:
+    branches: [us298-scratch-arm64]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: windows-installer-*
+          run-id: 36139887684
+          github-token: ${{ github.token }}
+          path: art
+      - name: Diagnose
+        shell: pwsh
+        run: |
+          "os64=$([Environment]::Is64BitOperatingSystem) arch=$env:PROCESSOR_ARCHITECTURE"
+          Get-ChildItem -Recurse art -Depth 2 -Filter *.exe | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300
+          if (Get-Command 7z -ErrorAction SilentlyContinue) { 7z l art\windows-installer-arm64\dist\bravebot-desktop-windows-arm64-setup.exe | Select-Object -First 40 }
+          function Show($label) {
+            "== $label"
+            Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'setup|Brave|Uninstall|7z|nsis' -or $_.CommandLine -match 'bravebot' } | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-Table -AutoSize | Out-String -Width 400
+            Get-ChildItem "$env:LOCALAPPDATA\Programs" -ErrorAction SilentlyContinue | Select-Object FullName | Out-String -Width 300
+            foreach ($root in 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall') {
+              Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object { $e = Get-ItemProperty $_.PSPath; if ($e.DisplayName -match 'Brave') { "$root\$($_.PSChildName) $($e.DisplayName) $($e.InstallLocation)" } }
+            }
+          }
+          foreach ($which in 'arm64', 'amd64') {
+            $exe = "art\windows-installer-$which\dist\bravebot-desktop-windows-$which-setup.exe"
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru -Wait
+            "$which installer exit $($p.ExitCode) after $($sw.Elapsed)"
+            Show "$which right after"
+            Start-Sleep 90
+            Show "$which after 90s"
+            Get-ChildItem $env:TEMP -Directory -ErrorAction SilentlyContinue | Where-Object LastWriteTime -gt (Get-Date).AddMinutes(-5) | Select-Object FullName | Out-String -Width 300
+            $u = Get-ChildItem "$env:LOCALAPPDATA\Programs\bravebot-desktop" -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue
+            if ($u) { Start-Process -FilePath $u.FullName -ArgumentList '/currentuser','/S' -Wait; Start-Sleep 30; Show "$which after uninstall" }
+          }
+          Get-WinEvent -LogName Application -MaxEvents 30 -ErrorAction SilentlyContinue | Where-Object LevelDisplayName -in 'Error','Warning' | Select-Object TimeCreated, ProviderName, Message | Format-List | Out-String -Width 300
