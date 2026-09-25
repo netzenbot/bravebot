@@ -45,7 +45,7 @@ const UNINSTALLER = 'Uninstall Brave Bot.exe'
 const SHORTCUT = join(process.env.APPDATA, 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${DISPLAY_NAME}.lnk`)
 const ENTRY = `HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${NAME}`
 // Electron's user data is named for `app.name`, which is the manifest's `name`.
-const USER_DATA = join(process.env.APPDATA, 'bravebot-ui')
+const USER_DATA = join(process.env.APPDATA, 'bravebot-desktop')
 const AGENT_STATE = join(homedir(), '.bravebot')
 
 const problems = []
@@ -334,8 +334,8 @@ async function main() {
   check(older?.DisplayVersion !== version, `the older build is installed first (${older?.DisplayVersion})`)
   // A file only the older install has, which the upgrade has to take away with the rest of it. An
   // upgrade that installed over the old files would leave it, and the check below would name it.
-  writeFileSync(join(INSTALL, 'check-windows-install-stale'), 'stale\n')
   await install(installer)
+  writeFileSync(join(INSTALL, 'check-windows-install-stale'), 'stale\n')
   checkInstalled(bundle)
   checkDataKept('upgrading')
   await startFromStartMenu()
