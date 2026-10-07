@@ -314,7 +314,8 @@ When a request is refused with one of those statuses, the turn compacts the conv
 the request again. The choice is made from the status and from the conversation's own shape, never
 from what the refusal said.
 
-- The request is sent again once. A second refusal is the turn's failure, with no second summary.
+- A turn sends a refused request again once. A second refusal in that turn is its failure, with no
+  second summary.
 - A conversation with nothing to give up (COMPACT-5) is not summarised, and the request is not
   sent again unchanged. The refusal is the failure.
 - A summariser that failed earlier in the turn is not asked again (COMPACT-8).

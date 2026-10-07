@@ -21451,15 +21451,24 @@ fn a_summary_that_fails_after_a_refusal_reports_the_refusal() {
     let config = config_with_budget(&endpoint, 1_000_000);
     let mut conversation = a_long_conversation();
 
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
     let error = take_a_turn_reporting(
         &config,
         &workspace,
         &mut conversation,
         Task::new("finish it"),
-        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut reporter,
         &bravebot_core::cancel::Cancel::new(),
     )
     .expect_err("the refusal stands when no summary can be made");
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .all(|line| !line.contains("continuing")),
+        "the turn said it was carrying on and then failed: {:?}",
+        reporter.narration
+    );
 
     let why = why_it_failed(&error);
     assert_eq!(

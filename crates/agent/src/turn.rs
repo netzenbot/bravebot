@@ -3998,13 +3998,17 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             Err(error) => {
                                 may_compact = false;
                                 let category = error.category();
+                                if let Some(refusal) = refusal {
+                                    reporter.narration(format!(
+                                        "the conversation could not be summarised ({}); the backend's refusal stands",
+                                        category.name()
+                                    ));
+                                    return Err(refusal.into());
+                                }
                                 reporter.narration(format!(
                                 "the conversation could not be summarised ({}); continuing with the existing context",
                                 category.name()
                             ));
-                                if let Some(error) = refusal {
-                                    return Err(error.into());
-                                }
                             }
                         }
                     }
@@ -4194,7 +4198,6 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                         other => other?,
                     };
                     asked_after_an_empty_reply = false;
-                    asked_after_a_refusal = false;
                     // The backend carries no call out of a reply the ceiling stopped (BACKEND-42),
                     // and one that did would be a call nobody finished writing.
                     if completion.cut_off.is_some() {
