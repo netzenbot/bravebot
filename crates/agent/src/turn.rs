@@ -3806,6 +3806,13 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         // Cleared only by a failure. A summary that could not be made once will not be made on the
         // next round either, and a turn should not spend a request per round finding that out.
         let mut may_compact = true;
+        // The refusal a request was answered with while the conversation is shortened to send it
+        // again (COMPACT-14). Held so that a compaction that shortens nothing, or cannot be made,
+        // reports the refusal and not the failure of the attempt to avoid it.
+        let mut refused_as_too_large: Option<crate::backend::BackendError> = None;
+        // Whether the request now in flight is the one sent again after such a compaction, so a
+        // second refusal is the turn's failure and the retry happens once.
+        let mut asked_after_a_refusal = false;
         // Whether the last request went out because the one before it came back empty (TURN-6).
         let mut asked_after_an_empty_reply = false;
         // Whether it went out because the one before it reached the output ceiling (TURN-7).
@@ -3895,7 +3902,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                     // Before the request rather than after the reply that overflowed. The figure being
                     // compared is the last round's, so this is one round late by construction, which is why
                     // the budget sits below any window rather than at it.
-                    if may_compact && context_tokens >= config.context_budget {
+                    let refusal = refused_as_too_large.take();
+                    if refusal.is_some() || (may_compact && context_tokens >= config.context_budget)
+                    {
                         reporter.phase(Phase::Compacting);
                         let mut chat = crate::processor::Chat {
                             config,
@@ -3945,11 +3954,20 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                     cached,
                                     timing: spent.finish(),
                                 });
-                                reporter.narration(format!(
-                                "the conversation was getting long, so {} earlier messages were \
-                         summarised and the last {} kept as they are",
-                                done.summarised, done.kept
-                            ));
+                                reporter.narration(if refusal.is_some() {
+                                    format!(
+                                        "the backend refused the request, possibly as too large, so {} \
+                                         earlier messages were summarised and the last {} kept as \
+                                         they are; asking again",
+                                        done.summarised, done.kept
+                                    )
+                                } else {
+                                    format!(
+                                        "the conversation was getting long, so {} earlier \
+                                         messages were summarised and the last {} kept as they are",
+                                        done.summarised, done.kept
+                                    )
+                                });
                             }
                             // Nothing to shorten yet, which is the ordinary answer and not worth a word.
                             // Nothing was sent, so asking again next round is free, and a round or two later
@@ -3961,7 +3979,14 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             // forever, buries the ones they can. What it was there to prevent, a session
                             // running out of room with no warning, is the context gauge's job, and the gauge
                             // does it better: it is always on screen, and it says nothing twice.
-                            Ok(None) => {}
+                            //
+                            // After a refusal there is something to say and nothing to ask again: the
+                            // request would go out unchanged, so the refusal is the answer.
+                            Ok(None) => {
+                                if let Some(error) = refusal {
+                                    return Err(error.into());
+                                }
+                            }
                             // The conversation is untouched, so the turn carries on with the history it had.
                             // Failing the turn over this would turn a request that might still have fit into
                             // one that certainly does not happen.
@@ -3977,6 +4002,9 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 "the conversation could not be summarised ({}); continuing with the existing context",
                                 category.name()
                             ));
+                                if let Some(error) = refusal {
+                                    return Err(error.into());
+                                }
                             }
                         }
                     }
@@ -4148,9 +4176,25 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                             }
                             return Err(error.into());
                         }
+                        // A request the backend refused as it stands, with a conversation that has
+                        // something to give up (COMPACT-14). Decided from the status and from the
+                        // conversation's own shape, so nothing the refusal said reaches the choice.
+                        // The refusal is held while the summary is made, and is the turn's failure if
+                        // nothing comes of that or the request is refused again.
+                        Err(error)
+                            if error.refused_the_body()
+                                && !asked_after_a_refusal
+                                && may_compact
+                                && conversation.compaction_boundary().is_some() =>
+                        {
+                            asked_after_a_refusal = true;
+                            refused_as_too_large = Some(error);
+                            continue;
+                        }
                         other => other?,
                     };
                     asked_after_an_empty_reply = false;
+                    asked_after_a_refusal = false;
                     // The backend carries no call out of a reply the ceiling stopped (BACKEND-42),
                     // and one that did would be a call nobody finished writing.
                     if completion.cut_off.is_some() {

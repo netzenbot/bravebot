@@ -415,6 +415,10 @@ replaces the earlier figure rather than leaving it standing. See
 A cut has to free more than it keeps, so a conversation with nothing worth giving up is left long
 rather than summarised once per round.
 
+A request the backend refuses with status 400 or 422 is compacted and sent again once, whatever the
+budget said, since a conversation can pass the window between two requests. A second refusal ends the
+turn with that status, as does a conversation with nothing to give up.
+
 Compaction never touches three things: the quarantine, which holds the only copy of what a surviving
 reference names; the reference counter, since a slot name handed out twice would collide; and the
 context's integrity, since nothing here has un-read what the conversation read. The cut never lands

@@ -301,3 +301,38 @@ the summariser does not. Without the argument they find out what was dropped on 
 `verified-by: bravebot_tui::app::the_compact_command_carries_its_focus_verbatim`
 `verified-by: bravebot_tui::app::a_word_longer_than_compact_is_still_a_prompt`
 `verified-by: bravebot_tui::render::the_compact_command_offers_a_focus_after_its_word`
+
+<a id="COMPACT-14"></a>
+### COMPACT-14: a request the backend refuses is sent again once, after a compaction
+
+A backend answers a request it will not take with status 400 or 422, and a conversation too large for
+the model is answered that way. The figure COMPACT-8 compares is the last round's, so a conversation
+can cross the window between two requests with the budget not yet reached, and the request that
+crosses it is refused.
+
+When a request is refused with one of those statuses, the turn compacts the conversation and sends
+the request again. The choice is made from the status and from the conversation's own shape, never
+from what the refusal said.
+
+- The request is sent again once. A second refusal is the turn's failure, with no second summary.
+- A conversation with nothing to give up (COMPACT-5) is not summarised, and the request is not
+  sent again unchanged. The refusal is the failure.
+- A summariser that failed earlier in the turn is not asked again (COMPACT-8).
+- A summary that cannot be made leaves the refusal that started it as the failure. The failure of the
+  attempt to avoid it is not reported in its place.
+- A status other than 400 and 422 starts no compaction.
+- The person is told the backend refused the request and that the conversation was summarised.
+  COMPACT-10 records the compaction as it records any other.
+
+**Why.** A session that ends in a bare status leaves a person with a conversation they cannot send and
+nothing to do about it but run `/compact` and ask again, which is exactly what the turn can do for
+them. A single retry bounds the cost: a 400 that has some other cause costs one summary and is then
+reported as it would have been.
+
+`verified-by: bravebot_agent::turn::a_request_refused_as_too_large_is_summarised_and_sent_again`
+`verified-by: bravebot_agent::turn::a_request_refused_again_after_the_summary_is_reported_without_a_second_summary`
+`verified-by: bravebot_agent::turn::a_refusal_with_nothing_to_summarise_costs_no_summariser_request`
+`verified-by: bravebot_agent::turn::a_summary_that_fails_after_a_refusal_reports_the_refusal`
+`verified-by: bravebot_agent::turn::a_refusal_after_a_failed_summary_does_not_ask_the_summariser_again`
+`verified-by: bravebot_agent::turn::a_refusal_that_is_not_about_the_body_is_not_answered_with_a_summary`
+`verified-by: bravebot_agent::backend::only_a_status_refusing_the_body_is_read_as_one_that_may_be_too_large`

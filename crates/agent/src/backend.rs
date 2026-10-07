@@ -201,6 +201,16 @@ impl BackendError {
         }
     }
 
+    /// Whether the service answered that it would not take the request body (COMPACT-14).
+    ///
+    /// Decided from the status alone, which is the service's envelope and not anything its reply
+    /// wrote. The statuses are the ones a request too large for the model's window is answered
+    /// with, and also what a body the service cannot parse is answered with; the caller tells the
+    /// two apart by whether shortening the conversation changes the answer.
+    pub fn refused_the_body(&self) -> bool {
+        matches!(self.diagnosis().status, Some(400 | 422))
+    }
+
     /// Whether the model finished its reply and said nothing in it: no text and no calls.
     ///
     /// Apart from every other unreadable reply because the conversation, not the connection, is
@@ -1847,6 +1857,36 @@ mod tests {
         assert_eq!(of_status(503).category, Category::Unavailable);
         assert_eq!(of_status(400).category, Category::Refused);
         assert_eq!(of_status(503).status, Some(503));
+    }
+
+    /// COMPACT-14: only the two statuses a service answers an unacceptable body with start a
+    /// compaction. A credential refused, a limit reached or a service down says nothing about the
+    /// size of the request, and a summary made for one is a request spent for nothing.
+    #[test]
+    fn only_a_status_refusing_the_body_is_read_as_one_that_may_be_too_large() {
+        let of_status = |status: u16| {
+            BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://service.example/v1/chat/completions".into(),
+                status,
+            }))
+        };
+        assert!(of_status(400).refused_the_body());
+        assert!(of_status(422).refused_the_body());
+        for status in [401, 403, 404, 413, 429, 500, 503] {
+            assert!(
+                !of_status(status).refused_the_body(),
+                "{status} was read as a refusal of the body"
+            );
+        }
+        let lost = BackendError::from(ChatError::Egress(
+            bravebot_net::EgressError::InsecureRedirect {
+                url: "https://service.example/v1/chat/completions".into(),
+            },
+        ));
+        assert!(
+            !lost.refused_the_body(),
+            "a request that never went out was read as refused"
+        );
     }
 
     /// A hop refused for dropping TLS is this process declining to send, not a request that did

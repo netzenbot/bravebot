@@ -21273,6 +21273,260 @@ fn a_conversation_past_the_budget_is_summarised_before_the_next_request() {
     );
 }
 
+/// The words every summariser request opens with, which tell it from a planner's.
+const THE_SUMMARISER_ASKING: &str = "You are summarising part of a conversation";
+
+/// The first exchange of [`a_long_conversation`], which a summary replaces.
+const THE_OLD_EXCHANGE: &str = "port the parser to the new lexer";
+
+/// A service that refuses any planner request still carrying the old exchange, as one does a prompt
+/// that is too large for the model, and answers once it is gone. The summariser is answered with
+/// `summariser`, so a test can make the summary fail.
+fn serve_refusing_a_request_that_is_too_large(summariser: Served) -> (String, MockRequests) {
+    serve_script_by(move |body| {
+        Some(if body.contains(THE_SUMMARISER_ASKING) {
+            summariser.clone()
+        } else if body.contains(THE_OLD_EXCHANGE) {
+            Served::Status(400)
+        } else {
+            Served::Reply(reply_with("done"))
+        })
+    })
+}
+
+fn the_summary() -> Served {
+    Served::Reply(reply_with(
+        "they are porting the parser and widened the error type",
+    ))
+}
+
+/// Every request a refused one is followed by differs from the ones before it: the client's probes
+/// each drop a field, and a summary changes the conversation. A body that appears twice is a request
+/// sent again unchanged, which a service that refused it will refuse again.
+fn assert_no_request_repeated(sent: &[String]) {
+    let distinct: std::collections::HashSet<&String> = sent.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        sent.len(),
+        "a refused request was sent again unchanged"
+    );
+}
+
+fn summariser_requests(sent: &[String]) -> usize {
+    sent.iter()
+        .filter(|body| body.contains(THE_SUMMARISER_ASKING))
+        .count()
+}
+
+/// COMPACT-14. A backend that refuses the request body is refusing it because the conversation is
+/// too large, which the measured figure did not warn of. The conversation is shortened and the same
+/// request goes out again, so the person's turn finishes instead of ending in a status.
+#[test]
+fn a_request_refused_as_too_large_is_summarised_and_sent_again() {
+    let scratch = Scratch::new("compact-after-refusal");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_refusing_a_request_that_is_too_large(the_summary());
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish it"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the refusal should have been answered by a shorter request");
+
+    assert_eq!(outcome.reply_for_display(), "done");
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        summariser_requests(&sent),
+        1,
+        "the conversation was not summarised exactly once"
+    );
+    let summarising = sent
+        .iter()
+        .position(|body| body.contains(THE_SUMMARISER_ASKING))
+        .unwrap();
+    assert!(
+        summarising > 0 && sent[summarising - 1].contains(THE_OLD_EXCHANGE),
+        "the summary was made without a refusal of the full conversation before it"
+    );
+    let last = sent.last().unwrap();
+    assert!(
+        last.contains("widened the error type") && !last.contains(THE_OLD_EXCHANGE),
+        "the request sent again was not the shortened one: {last}"
+    );
+    assert!(
+        reporter
+            .narration
+            .iter()
+            .any(|line| line.contains("refused the request")),
+        "the person was not told why the conversation was shortened: {:?}",
+        reporter.narration
+    );
+}
+
+/// COMPACT-14. A request refused again after the summary is the turn's failure, reported with the
+/// refusal and not asked a third time with a second summary behind it.
+#[test]
+fn a_request_refused_again_after_the_summary_is_reported_without_a_second_summary() {
+    let scratch = Scratch::new("compact-after-refusal-twice");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script_by(|body| {
+        Some(if body.contains(THE_SUMMARISER_ASKING) {
+            the_summary()
+        } else {
+            Served::Status(400)
+        })
+    });
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    let error = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish it"),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("a service that refuses every request fails the turn");
+
+    assert_eq!(why_it_failed(&error).status, Some(400));
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        summariser_requests(&sent),
+        1,
+        "a refused request was summarised more than once"
+    );
+    assert!(
+        !sent.last().unwrap().contains(THE_SUMMARISER_ASKING),
+        "the turn went on asking the summariser after the shortened request was refused"
+    );
+}
+
+/// COMPACT-14. A conversation with nothing to give up is not summarised: no request is spent on a
+/// summary, and the refusal is the failure.
+#[test]
+fn a_refusal_with_nothing_to_summarise_costs_no_summariser_request() {
+    let scratch = Scratch::new("compact-after-refusal-nothing");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script_by(|_| Some(Served::Status(400)));
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.measured(50_000);
+
+    let error = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish it"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the refusal is the failure");
+
+    assert_eq!(why_it_failed(&error).status, Some(400));
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        summariser_requests(&sent),
+        0,
+        "a request was spent on a summary of nothing"
+    );
+    assert_no_request_repeated(&sent);
+}
+
+/// COMPACT-14. A summary that cannot be made leaves the person with the refusal that started it, not
+/// with the failure of the attempt to get round it, since the refusal is what they can act on.
+#[test]
+fn a_summary_that_fails_after_a_refusal_reports_the_refusal() {
+    let scratch = Scratch::new("compact-after-refusal-fails");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_refusing_a_request_that_is_too_large(Served::Status(401));
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+
+    let error = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish it"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the refusal stands when no summary can be made");
+
+    let why = why_it_failed(&error);
+    assert_eq!(
+        why.status,
+        Some(400),
+        "the summariser's failure was reported: {why:?}"
+    );
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_eq!(summariser_requests(&sent), 1);
+    assert_no_request_repeated(&sent);
+}
+
+/// COMPACT-14. A summariser that already failed in the turn is not asked again because a request
+/// was refused: COMPACT-8 stops it for the rest of the turn.
+#[test]
+fn a_refusal_after_a_failed_summary_does_not_ask_the_summariser_again() {
+    let scratch = Scratch::new("compact-after-refusal-stopped");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_refusing_a_request_that_is_too_large(Served::Status(401));
+    // Under the measured figure, so the summary is tried before the first request and fails there.
+    let config = config_with_budget(&endpoint, 1_000);
+    let mut conversation = a_long_conversation();
+
+    let error = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish it"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the refusal stands");
+
+    assert_eq!(why_it_failed(&error).status, Some(400));
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_eq!(
+        summariser_requests(&sent),
+        1,
+        "a summariser that had failed was asked again after a refusal"
+    );
+}
+
+/// COMPACT-14. Only a refusal of the body starts a summary. A credential the service will not take
+/// says nothing about the size of the request.
+#[test]
+fn a_refusal_that_is_not_about_the_body_is_not_answered_with_a_summary() {
+    let scratch = Scratch::new("compact-after-other-refusal");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_script_by(|_| Some(Served::Status(401)));
+    let config = config_with_budget(&endpoint, 1_000_000);
+    let mut conversation = a_long_conversation();
+
+    let error = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("finish it"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect_err("the credential is refused");
+
+    assert_eq!(why_it_failed(&error).status, Some(401));
+    let sent: Vec<String> = received.try_iter().collect();
+    assert_eq!(summariser_requests(&sent), 0);
+}
+
 /// The exchange in a summariser's request is the part compaction gives up, so a breakpoint on the
 /// end of it asks a service to store a prefix nothing sends again. A cache write is charged above
 /// the tokens it covers, which makes that a premium on one of the longest prefixes a session sends,
@@ -33089,6 +33343,15 @@ enum Served {
 }
 
 fn serve_script(script: Vec<Served>) -> (String, MockRequests) {
+    let mut script = script.into_iter();
+    serve_script_by(move |_| script.next())
+}
+
+/// As [`serve_script`], with each answer chosen by `next` from the request it answers, for the tests
+/// whose subject is what the service answers to a particular request and not to the nth one.
+fn serve_script_by(
+    mut next: impl FnMut(&str) -> Option<Served> + Send + 'static,
+) -> (String, MockRequests) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().expect("addr").port();
     let (sender, receiver) = mpsc::channel();
@@ -33096,7 +33359,6 @@ fn serve_script(script: Vec<Served>) -> (String, MockRequests) {
     let stopped = Arc::new(AtomicBool::new(false));
     let stopping = Arc::clone(&stopped);
     let worker = thread::spawn(move || {
-        let mut script = script.into_iter();
         while let Ok((mut stream, _)) = listener.accept() {
             if stopping.load(Ordering::Acquire) {
                 break;
@@ -33131,7 +33393,7 @@ fn serve_script(script: Vec<Served>) -> (String, MockRequests) {
             let scripted = if body.contains(A_CHECK_ASKING) {
                 Some(Served::Reply(a_check_finding_nothing()))
             } else {
-                script.next()
+                next(&body)
             };
 
             let answer = match scripted {
