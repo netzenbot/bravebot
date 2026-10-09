@@ -633,6 +633,47 @@ jobs:
         timeout-minutes: 10
         run: make check-ui-walkthrough
 
+  # The confinement backend where it runs. The `windows` job above lints the AppContainer calls and
+  # runs nothing, and a decision those calls apply is pinned by every job that runs the suite, so
+  # without this job nothing starts a process under a container: whether a program is refused a
+  # path it was not granted, and whether `cmd.exe`, `git` or a compiler starts under the empty
+  # Windows base, would be argued from the code. Only the crates that confine are run, since the
+  # rest of the suite spawns a POSIX shell and drives a pty. -gnu for the reason the windows job
+  # gives, and Git's bash because `git` and the test helpers are looked up on its PATH.
+  sandbox-windows:
+    name: Sandbox on Windows
+    runs-on: windows-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the backend
+        run: cargo test -p bravebot-sandbox --locked --no-fail-fast
+
+      - name: Test what the agent confines with it
+        run: cargo test -p bravebot-agent --locked --no-fail-fast --lib confine::
+
+      - name: Test a confined program run for a person
+        run: cargo test -p bravebot-agent --locked --no-fail-fast --test confine
+
   # The installers a release ships, built as a release builds them from the cross-built helpers,
   # and each installed on a runner of its own architecture by the job after this one. Beside each
   # goes an installer of the same bundle under a lower version, for that job to upgrade from, since
