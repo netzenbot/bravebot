@@ -2614,6 +2614,7 @@ verb-read-file = Lire
 verb-list-files = Lister
 verb-search = Chercher
 verb-read-git = Historique
+verb-repo-map = Cartographier
 verb-lsp = Consulter
 verb-write-file = Écrire
 verb-edit-file = Modifier
