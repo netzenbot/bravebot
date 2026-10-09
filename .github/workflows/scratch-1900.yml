@@ -1,0 +1,33 @@
+name: scratch-1900
+on:
+  push:
+    branches:
+      - add-windows-sandbox-ci-job
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+  BRAVEBOT_ALLOW_UNCONFIGURED_BUILD: "1"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+jobs:
+  sandbox-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Backend
+        if: always()
+        run: cargo test -p bravebot-sandbox --locked --no-fail-fast
+      - name: Agent lib
+        if: always()
+        run: cargo test -p bravebot-agent --locked --no-fail-fast --lib confine::
+      - name: Agent test
+        if: always()
+        run: cargo test -p bravebot-agent --locked --no-fail-fast --test confine
