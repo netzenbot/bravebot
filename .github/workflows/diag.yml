@@ -14,4 +14,4 @@ jobs:
         with:
           toolchain: stable-x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-      - run: BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo test -p bravebot-sandbox --locked --test diag_nul -- --nocapture
+      - run: BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo test -p bravebot-sandbox --locked --test diag_nul nul_acl_experiment -- --nocapture

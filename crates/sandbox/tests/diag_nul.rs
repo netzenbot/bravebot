@@ -1,4 +1,5 @@
 #![cfg(windows)]
+#![allow(unsafe_code)]
 use bravebot_sandbox::base::{Prelude, base};
 use bravebot_sandbox::policy::SandboxPolicy;
 use bravebot_sandbox::windows::AppContainerSandbox;
@@ -114,4 +115,146 @@ fn nul_diagnostic() {
             );
         }
     }
+}
+
+use std::ptr::{null, null_mut};
+use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertStringSidToSidW,
+    EXPLICIT_ACCESS_W, GRANT_ACCESS, GetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1,
+    SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_GROUP, TRUSTEE_IS_SID,
+    TRUSTEE_W,
+};
+use windows_sys::Win32::Security::{
+    ACL, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR,
+};
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn sddl_of(path: &str) -> String {
+    let w = wide(path);
+    let mut dacl: *mut ACL = null_mut();
+    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+    let r = unsafe {
+        GetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut sd,
+        )
+    };
+    if r != ERROR_SUCCESS {
+        return format!("GetNamedSecurityInfoW error {r}");
+    }
+    let mut text: *mut u16 = null_mut();
+    let ok = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            sd,
+            SDDL_REVISION_1,
+            DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+            &mut text,
+            null_mut(),
+        )
+    };
+    if ok == 0 {
+        return "convert failed".into();
+    }
+    let mut n = 0;
+    while unsafe { *text.add(n) } != 0 {
+        n += 1;
+    }
+    let s = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, n) });
+    unsafe { LocalFree(text.cast()) };
+    s
+}
+
+fn add_ace(path: &str, sid: &str, mask: u32) -> String {
+    let w = wide(path);
+    let mut dacl: *mut ACL = null_mut();
+    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+    let r = unsafe {
+        GetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut sd,
+        )
+    };
+    if r != ERROR_SUCCESS {
+        return format!("get error {r}");
+    }
+    let mut psid = null_mut();
+    let ws = wide(sid);
+    if unsafe { ConvertStringSidToSidW(ws.as_ptr(), &mut psid) } == 0 {
+        return "sid parse failed".into();
+    }
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: mask,
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: 0,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_GROUP,
+            ptstrName: psid.cast(),
+        },
+    };
+    let mut merged: *mut ACL = null_mut();
+    let b = unsafe { SetEntriesInAclW(1, &entry, dacl, &mut merged) };
+    if b != ERROR_SUCCESS {
+        return format!("SetEntriesInAcl error {b}");
+    }
+    let s = unsafe {
+        SetNamedSecurityInfoW(
+            w.as_ptr() as *mut u16,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            merged,
+            null(),
+        )
+    };
+    format!("SetNamedSecurityInfoW => {s}")
+}
+
+#[test]
+fn nul_acl_experiment() {
+    for path in [
+        r"\\.\NUL",
+        r"\\.\GLOBALROOT\Device\Null",
+        r"\\?\GLOBALROOT\Device\Null",
+        "NUL",
+    ] {
+        println!("SDDL {path}: {}", sddl_of(path));
+    }
+    let sb = AppContainerSandbox::new().unwrap();
+    let t = scratch("tmp2");
+    let policy = base(Prelude::Windows, &t, None, None).starting_in(&t);
+    println!(
+        "BEFORE type nul: {}",
+        run(&sb, "cmd.exe", &["/c", "type nul"], &policy)
+    );
+    println!(
+        "ADD AAP generic rw on NUL: {}",
+        add_ace(r"\\.\NUL", "S-1-15-2-1", 0xC0000000)
+    );
+    println!("SDDL after: {}", sddl_of(r"\\.\NUL"));
+    println!(
+        "AFTER type nul: {}",
+        run(&sb, "cmd.exe", &["/c", "type nul"], &policy)
+    );
+    println!("AFTER git: {}", run(&sb, "git", &["--version"], &policy));
 }
