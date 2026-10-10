@@ -1,0 +1,17 @@
+name: Diag
+on:
+  push:
+    branches: [diag-nul-device]
+jobs:
+  diag:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - run: BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo test -p bravebot-sandbox --locked --test diag_nul -- --nocapture
