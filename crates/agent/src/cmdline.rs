@@ -302,7 +302,7 @@ impl fmt::Display for Reason {
                 "an assignment's value must be literal text, so that the plan shows what the program will see",
             ),
             Self::NoMatch => f.write_str(
-                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show",
+                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show. If the program should receive the pattern, quote the word so it is passed as written, for example find . -name '*.md'",
             ),
             Self::TooMany { found, cap } => write!(
                 f,
@@ -1379,7 +1379,8 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
             // Never the pattern itself. A shell passes an unmatched pattern through as an
-            // argument, and a plan showing one reads as a list of files.
+            // argument, and a plan showing one reads as a list of files. A pattern meant for the
+            // program is quoted, and the refusal says so.
             return Err(refused(Reason::NoMatch));
         }
         out.extend(matched);
@@ -2852,6 +2853,24 @@ mod tests {
             assert_eq!(refusal.reason, Reason::NoMatch, "{line}");
             assert_eq!(refusal.text, text, "{line}");
         }
+    }
+
+    /// `find . -name *.md` means the pattern for `find`, and the refusal is the only thing the
+    /// planner sees, so it has to name the fix. The advice is only worth giving if the quoted
+    /// spelling it shows is accepted and arrives as written.
+    #[test]
+    fn the_refusal_of_a_pattern_matching_nothing_says_to_quote_the_word() {
+        let tree = Tree::new("quote-advice");
+        tree.file("a.rs");
+        let refusal = expansion_refused("find . -name *.md", 3, &tree.root);
+        assert_eq!(refusal.reason, Reason::NoMatch);
+        assert_eq!(refusal.text, "*.md");
+        let shown = refusal.to_string();
+        assert!(
+            shown.contains("quote the word") && shown.contains("-name '*.md'"),
+            "the refusal does not tell the planner to quote the word: {shown}"
+        );
+        assert_eq!(expanded("find . -name '*.md'", 3, &tree.root), ["*.md"]);
     }
 
     /// An approval prompt long enough that nobody reads it is a prompt that grants everything and

@@ -215,7 +215,8 @@ approval covers without the text changing at all.
 Expansion happens against the workspace at compile time, so the person sees the file list rather
 than the pattern. A pattern matching nothing is a compile error and not an argument passed through
 literally, which is what a shell would do. A plan that showed the pattern would read as a list of
-files.
+files. A pattern meant for the program, such as the one `find . -name '*.md'` gives `find`, is
+written quoted, and the refusal says to quote the word.
 
 **An option carrying a value is not a file pattern.** A word that starts with a dash and names the
 option before an `=` that comes ahead of any pattern, such as `--include=*.md`, stands for itself.
@@ -248,6 +249,8 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::an_option_value_pattern_is_not_replaced_by_a_file_named_like_it`
 `verified-by: bravebot_agent::cmdline::an_option_value_with_braces_is_passed_through_for_each_spelling`
 `verified-by: bravebot_agent::cmdline::only_an_option_carrying_a_value_is_passed_through`
+`verified-by: bravebot_agent::cmdline::the_refusal_of_a_pattern_matching_nothing_says_to_quote_the_word`
+`verified-by: bravebot_agent::tools::the_run_description_says_a_pattern_for_the_program_is_quoted`
 `verified-by: bravebot_agent::cmdline::expansion_is_bounded_and_the_refusal_says_the_count`
 `verified-by: bravebot_agent::cmdline::a_tree_pattern_does_not_descend_into_an_ignored_directory`
 `verified-by: bravebot_agent::cmdline::a_dot_file_is_matched_only_by_a_pattern_that_writes_the_dot`
