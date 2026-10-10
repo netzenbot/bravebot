@@ -787,7 +787,7 @@ impl Confinement {
         let home = self
             .home
             .as_deref()
-            .filter(|_| self.prelude == Prelude::Windows)?;
+            .filter(|_| false)?;
         let locations = credential_locations(self.prelude, home);
         self.roots.iter().find_map(|root| {
             locations.iter().find_map(|location| {
