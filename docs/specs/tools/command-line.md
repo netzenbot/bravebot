@@ -250,7 +250,7 @@ everything and asks nothing.
 `verified-by: bravebot_agent::cmdline::an_option_value_with_braces_is_passed_through_for_each_spelling`
 `verified-by: bravebot_agent::cmdline::only_an_option_carrying_a_value_is_passed_through`
 `verified-by: bravebot_agent::cmdline::the_refusal_of_a_pattern_matching_nothing_says_to_quote_the_word`
-`verified-by: bravebot_agent::tools::the_run_description_says_a_pattern_for_the_program_is_quoted`
+`verified-by: bravebot_agent::tools::the_run_description_says_when_a_pattern_for_the_program_is_quoted`
 `verified-by: bravebot_agent::cmdline::expansion_is_bounded_and_the_refusal_says_the_count`
 `verified-by: bravebot_agent::cmdline::a_tree_pattern_does_not_descend_into_an_ignored_directory`
 `verified-by: bravebot_agent::cmdline::a_dot_file_is_matched_only_by_a_pattern_that_writes_the_dot`
