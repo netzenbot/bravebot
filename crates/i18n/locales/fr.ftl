@@ -43,6 +43,7 @@ cli-usage-resume-task = Envoyer une tâche unique comme tour suivant d'une sessi
 cli-usage-continue-task = Envoyer une tâche unique comme tour suivant de la session la plus récente
 cli-usage-fork = Dupliquer une session pour explorer une autre voie
 cli-usage-doctor = Vérifier la configuration et le confinement
+cli-usage-doctor-sandbox = Exécuter les flux de travail courants dans le bac à sable et indiquer lesquels fonctionnent
 cli-usage-update = Afficher la commande qui met à jour cette copie
 cli-usage-bug-report = Écrire la version, le rapport de doctor et le nom du journal le plus récent dans un fichier à joindre à un rapport de bogue
 cli-usage-import = Importer un abonnement Leo Premium
@@ -145,6 +146,9 @@ cli-option-sandbox-allow-write =
     Laisser les programmes lancés par `run` écrire ce chemin, qu'ils peuvent aussi lire. Réglage : sandbox.filesystem.allowWrite (répétable)
 cli-option-sandbox-deny-write =
     Refuser aux programmes lancés par `run` l'écriture de ce chemin, un dossier de la session compris. Réglage : sandbox.filesystem.denyWrite (répétable)
+cli-option-log-level =
+    Ce qui est écrit de la forme d'un échec dans le journal de diagnostic : error (par défaut), info ou debug.
+    Hôtes, statuts et décomptes seulement, jamais de contenu ; une session incognito n'écrit rien
 cli-option-agent = Adresser chaque tour à cette définition, comme /agent le fait pour un seul
 cli-option-system-prompt =
     Remplacer la phrase d'ouverture de l'invite système du planificateur à chaque tour. Le reste demeure
@@ -202,6 +206,8 @@ cli-settings-not-a-file = --settings ne nomme aucun fichier : { $path }
 cli-run-network-needs-a-word = --run-network demande open ou closed
 cli-run-network-unknown = --run-network accepte open ou closed, pas { $word }
 cli-sandbox-flag-needs-a-path = { $flag } demande un chemin
+cli-log-level-needs-a-word = --log-level demande error, info ou debug
+cli-log-level-unknown = --log-level accepte error, info ou debug, pas { $word }
 cli-tools-needs-a-list = --tools demande une liste de noms d'outils séparés par des virgules
 cli-tools-unknown = --tools nomme { $name }, qui n'est pas un outil. Les outils sont : { $known }
 cli-tools-not-for-a-command =
@@ -433,6 +439,8 @@ doctor-tiers-absent = aucun configuré (définir ANTHROPIC_DEFAULT_OPUS_MODEL)
 doctor-settings = réglages
 doctor-settings-names = { $names }
 doctor-settings-absent = aucun settings.json
+doctor-scrub-pattern = par motif
+doctor-scrub-pattern-matched = { $pattern } a retenu { $variable }, qu'aucun programme lancé par cet agent ne reçoit
 doctor-permissions = permissions
 doctor-permissions-absent = aucune règle
 doctor-permissions-count =
@@ -466,6 +474,9 @@ doctor-settings-advisor-ignored =
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-fallback-ignored =
     fallbackModel dans { $path } n'est pas appliqué : il n'est lu que depuis
+    ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-summary-ignored =
+    summaryModel dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
 doctor-settings-agent-ignored =
     agent dans { $path } n'est pas appliqué : il n'est lu que depuis
@@ -538,6 +549,7 @@ doctor-leo = leo
 doctor-subscription =
     abonnement { $environment } importé, { $unspent } identifiants sur { $total } non dépensés
 doctor-state-directory = répertoire d'état { $path }, depuis { $variable }
+doctor-state-directory-logs = journaux de diagnostic { $path }
 doctor-state-directory-unprotected = non restreint
 doctor-state-directory-permissions =
     l'historique des invites, les enregistrements de session et les choix retenus portent les
@@ -1142,6 +1154,27 @@ mcp-move-again =
     { $alias } a été redirigé de nouveau, hors de là où il venait d'être déplacé, cela a donc été
     refusé
 
+## Des programmes qui demandent un chemin de plus pour la session
+
+path-title = laisser les programmes atteindre un autre chemin ?
+path-reads = les programmes que lance cette session pourront lire { $path }
+path-writes = les programmes que lance cette session pourront lire et écrire { $path }
+path-why = le planificateur dit : { $why }
+path-explained =
+    Chaque commande que le planificateur exécute d'ici la fin de cette session l'obtient. Rien
+    n'est écrit sur le disque, la session suivante demandera donc à nouveau. /reach paths liste
+    ce qui a été autorisé et /reach paths remove <numéro> en retire un.
+path-not-trusted =
+    Le répertoire n'est pas marqué comme fiable : ce qu'il contient garde l'étiquette qu'il
+    avait, et un fichier qui s'y trouve n'est pas plus cru qu'avant.
+path-yes = Oui, pour cette session
+path-no = Non
+path-listed = { $number }. chaque commande { $access } aussi { $path }, pour cette session
+path-none = aucun chemin n'a été demandé dans cette session
+path-removed = retiré : aucune commande ne { $access } plus { $path }
+path-refused-number = aucun chemin demandé n'est numéroté { $number }
+path-usage = /reach paths liste les chemins que les programmes ont été autorisés à atteindre dans cette session. /reach paths remove <numéro> en retire un.
+
 ## Approuver un répertoire, demandé une fois quand une session démarre ailleurs
 
 trust-directory-title = faire confiance à ce répertoire ?
@@ -1658,6 +1691,10 @@ count-commands = { $count ->
     [one] { $count } commande
    *[other] { $count } commandes
     }
+count-requested-paths = { $count ->
+    [one] { $count } chemin
+   *[other] { $count } chemins
+    }
 count-reach-grants = { $count ->
     [one] { $count } autorisation
    *[other] { $count } autorisations
@@ -1800,6 +1837,10 @@ status-remembered-this-session = mémorisée dans cette session
 status-remembered-earlier = mémorisée dans une session antérieure
 status-remembered-where = supprimez une ligne de { $path } pour qu'elle soit redemandée
 status-reach = Accès retenus
+status-requested-paths = Chemins demandés
+status-requested-paths-note =
+    les programmes que lance cette session peuvent les atteindre ; les répertoires ne sont pas
+    fiables. /reach paths remove <numéro> en retire un
 status-reach-note =
     ajoutés au plan de la commande que chacun nomme ; /reach remove <numéro> en oublie un
 status-remembered-and-more = { $count ->
@@ -1845,6 +1886,9 @@ context-section-other = Autres messages
 request-title = La dernière requête envoyée à { $model }, lue dans la requête elle-même
 request-tools = Outils proposés : { $names }
 request-no-tools = Outils proposés : aucun
+request-instruction-files = Fichiers d'instructions chargés : { $files }
+request-no-instruction-files = Fichiers d'instructions chargés : aucun
+request-instruction-file = { $path } ({ $bytes } octets)
 request-trusted = { $what } (fiable)
 request-bytes-mark = [une image ou un fichier, envoyé en octets]
 request-label-typed = saisi
@@ -2627,6 +2671,7 @@ verb-spawn-processor = Processeur isolé
 verb-load-skill = Compétence
 verb-load-tool = Charger
 verb-ask-user = Demander
+verb-request-path = Accéder
 verb-run = Exécuter
 verb-read-output = Lire la sortie
 verb-vet-content = Vérifier
@@ -2656,6 +2701,14 @@ delegate-more-calls = { $count } appels jusqu'ici
 delegate-model-needs-sign-in =
     { $definition } a demandé { $model }, qui exige d'abord une connexion : il n'a pas été lancé
 delegate-model-substituted = { $definition } a demandé { $model } et un autre modèle a répondu
+summary-model-needs-sign-in =
+    { $model } est défini comme modèle de résumé et exige d'abord une connexion : rien n'a été envoyé
+summary-model-refused =
+    { $model } est défini comme modèle de résumé et les réglages gérés de cette machine ne
+    l'autorisent pas : rien n'a été envoyé
+summary-model-not-served =
+    { $model } est défini comme modèle de résumé et aucun service configuré ne le sert : rien n'a
+    été envoyé
 delegate-skills-not-found =
     { $count ->
         [one] { $definition } nomme une compétence que cette session n'a pas trouvée, si bien qu'elle n'est pas proposée à son délégué : { $skills }
@@ -2867,15 +2920,48 @@ reply-usage = reply exige l'identifiant d'une session et l'invite à envoyer
 attach-not-running = { $name } n'est pas en cours d'exécution.
 attach-unreachable = Impossible de joindre { $name } : { $problem }
 attach-taken = Un terminal est déjà attaché à { $name }.
-attach-joined = Attaché à { $name }. Ctrl-C la laisse en cours d'exécution.
+attach-joined = Attaché à { $name }. /detach ou Ctrl-C la laisse en cours d'exécution.
 attach-line-not-sent = Non envoyée : la session n'attend pas de ligne.
 attach-left = La session est terminée.
+attach-detached = Détaché de { $name }. Elle reste en cours d'exécution.
+attach-stopping = { $name } s'arrête après une heure d'inactivité. Rejoignez-la de nouveau pour la démarrer.
 reply-sent = Envoyée à { $name }.
 reply-working = { $name } travaille et n'accepte pas d'invite maintenant. Répondez quand elle est inactive.
 reply-needs-input = { $name } attend la réponse à une question. Répondez-y avec : bravebot attach { $id }
 reply-not-sent = { $name } n'a pas pris l'invite.
+reply-stopping = { $name } s'arrête après une heure d'inactivité. Répondez de nouveau pour la démarrer.
 bg-restart-needs-a-terminal = { $name } est arrêtée, et seul un terminal peut la redémarrer.
+bg-interrupted-needs-a-terminal = { $name } a été interrompue, et seul un terminal peut la redémarrer.
+bg-interrupted-not-repeated = { $name } a été interrompue au milieu d'un tour. La redémarrer ne répète pas ce tour.
 resume-held-by-background = { $name } est tenue par une session en arrière-plan en cours d'exécution. Rejoignez-la avec : bravebot attach { $id }
+
+# `bravebot doctor --sandbox-check` : git, gh, make, cargo et les autres programmes courants, lancés
+# comme une session les lance. Une ligne est un flux de travail ; une ligne en échec dit où, quoi
+# faire, et où est allée la sortie du programme. La sortie elle-même n'est jamais affichée.
+cli-doctor-sandbox-takes-nothing-else = doctor --sandbox-check n'accepte aucun autre argument.
+doctor-sandbox-not-here = doctor --sandbox-check exécute des programmes dans le bac à sable sous Linux et macOS. Cette plateforme confine les programmes autrement, et les flux de travail n'y sont pas exécutés.
+doctor-sandbox-cannot-confine = Cette machine ne peut pas confiner un programme, il n'y a donc rien à vérifier. bravebot doctor indique le confinement qu'il peut appliquer.
+doctor-sandbox-no-place = Il n'y a pas de répertoire d'état où exécuter les flux de travail. bravebot doctor indique quelles variables en nomment un.
+doctor-sandbox-temporary = Le répertoire d'état { $path } se trouve sous le répertoire temporaire, où le bac à sable laisse écrire tout programme, si bien qu'une écriture refusée ne pourrait pas être distinguée d'une écriture permise. Déplacez le répertoire d'état.
+doctor-sandbox-io = Impossible de préparer { $path } : { $detail }
+doctor-sandbox-passed = réussi
+doctor-sandbox-failed = ÉCHEC
+doctor-sandbox-skipped = ignoré
+doctor-sandbox-because = car
+doctor-sandbox-not-installed = { $programs } n'est pas installé
+doctor-sandbox-at = où
+doctor-sandbox-exited = étape { $stage }, { $program }, s'est terminé avec le code { $code }
+doctor-sandbox-did-not-exit = étape { $stage }, { $program }, ne s'est pas terminé
+doctor-sandbox-fix = à faire
+doctor-sandbox-fix-refused = Le bac à sable a refusé quelque chose dont ce programme a besoin. Lisez le journal pour trouver le chemin, puis ajoutez le répertoire avec --add-dir ou /add-dir, ou exécutez vous-même la commande hors d'une session.
+doctor-sandbox-fix-allowed = Le bac à sable a laissé un programme atteindre une chose qu'il sert justement à lui interdire. Ne vous y fiez pas avant que ce soit corrigé, et signalez-le.
+doctor-sandbox-fix-without = Le flux de travail échoue aussi sans le bac à sable, qui n'en est donc pas la cause. Vérifiez que le programme fonctionne sur cette machine.
+doctor-sandbox-fix-setup = La préparation du flux de travail a échoué hors du bac à sable. Vérifiez que le programme fonctionne sur cette machine.
+doctor-sandbox-fix-not-confined = La plateforme n'a pas voulu confiner le programme : { $detail }
+doctor-sandbox-fix-login = gh a une connexion hors du bac à sable qu'il ne peut pas lire dans celui-ci. Elle est peut-être conservée dans un fichier que le bac à sable refuse, comme un trousseau autre que le trousseau « session ». Ajoutez ce fichier à sandbox.filesystem.allowRead dans vos réglages, ou rangez le jeton dans un fichier que le bac à sable laisse lire à un programme avec : gh auth login --insecure-storage
+doctor-sandbox-log = journal
+doctor-sandbox-total = total
+doctor-sandbox-counts = réussis : { $passed }, en échec : { $failed }, ignorés : { $skipped }
 
 handoff-needs-a-goal = /handoff prend la suite du travail, pour laquelle le résumé est écrit
 handoff-nothing-to-hand-off = rien à transmettre pour l'instant : la session n'a pas d'enregistrement avant la fin de son premier tour
