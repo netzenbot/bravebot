@@ -2046,7 +2046,7 @@ pub struct Tools<'a> {
 ///
 /// The settled list is set once per process, so without this every test in a binary would hold
 /// the same list and none could set one without the others seeing it.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) mod scripted_hosts {
     use bravebot_config::sandbox_network::Hosts;
     use std::cell::RefCell;
@@ -2086,9 +2086,9 @@ impl<'a> Tools<'a> {
             .chain(self.workspace.added_directories().iter().cloned())
             .collect();
         let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         let scripted = scripted_hosts::held();
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         let hosts = scripted.as_ref().or(hosts);
         let confinement =
             crate::confine::Confinement::here(roots, self.workspace.scratch(), self.profile)?
