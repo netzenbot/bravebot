@@ -820,14 +820,16 @@ A repository can set `user.signingkey` to a key the person's own configuration d
 the repository's configuration is not read, so a stage that signs with it cannot load that public key
 even though the agent it is lent holds the key. A stage that signs, and a stage with the remote scope
 for a person whose git signs with ssh, is therefore also lent every `*.pub` file directly inside
-`~/.ssh` whose key the agent holds. The agent named by the stage's own `SSH_AUTH_SOCK` is asked for
+`~/.ssh` whose key the agent holds. The agent named by the `SSH_AUTH_SOCK` the process started with, which a step that carries the scope
+cannot assign, is asked for
 its keys with the identities request of the agent protocol, and a file is lent where its first line
 holds one of them. The agent already signs with any key it holds for a stage that reaches its socket,
 so a file that only names one lends nothing the socket does not. What is lent does not depend on the
 repository's configuration, which stays unread. Each file gets the checks a file named by an
 `IdentityFile` gets: a regular file named `*.pub` once a link is followed, outside every credential
 location other than `~/.ssh`, never a private key, and at most 32 files. Where there is no
-`SSH_AUTH_SOCK`, nothing answers there within two seconds, or the answer is not an identities list,
+`SSH_AUTH_SOCK`, nothing answers there in full within two seconds, or the answer is not an identities
+list,
 only the configured key is lent. Where `gpg.format` is not `ssh` in the person's own configuration
 nothing is lent. This adds no dependency and is not done on Windows. The prompt says so in the fixed
 sentence about the signing key, so that a signature that fails for a key the agent does not hold can
@@ -897,6 +899,7 @@ be told from one the scope never reached.
 `verified-by: bravebot_sandbox::signing::a_repository_key_is_not_read_when_a_global_key_overrides_it`
 `verified-by: bravebot_sandbox::agent::an_agent_that_holds_two_keys_lists_both`
 `verified-by: bravebot_sandbox::agent::an_agent_that_cannot_be_asked_holds_nothing`
+`verified-by: bravebot_sandbox::agent::an_agent_that_never_answers_holds_nothing_after_the_wait`
 `verified-by: bravebot_sandbox::agent::an_answer_cut_short_holds_no_key`
 `verified-by: bravebot_sandbox::signing::a_public_key_in_ssh_that_the_agent_holds_is_lent_beside_the_configured_key`
 `verified-by: bravebot_sandbox::signing::a_public_key_in_ssh_that_the_agent_does_not_hold_is_not_lent`

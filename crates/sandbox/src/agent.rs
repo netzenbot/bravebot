@@ -11,7 +11,7 @@ use std::path::Path;
 #[cfg(unix)]
 const ANSWER_LIMIT: usize = 1 << 20;
 
-/// How long a connection, a write or a read waits for the agent.
+/// How long the whole question may take, connecting and answering included.
 #[cfg(unix)]
 const WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -24,19 +24,35 @@ const REQUEST_IDENTITIES: u8 = 11;
 const IDENTITIES_ANSWER: u8 = 12;
 
 /// The wire form of each public key the agent at `socket` holds. Empty where the socket is not an
-/// absolute path, nothing answers there, the answer is late, too long, or does not parse.
+/// absolute path, nothing answers there, the answer is not complete within [`WAIT`], is too long,
+/// or does not parse.
+///
+/// The question is asked from a thread of its own, since connecting to a socket whose listener is
+/// not accepting can block with no timeout. A thread that is stuck there is left behind and ends
+/// when the connection does.
 #[cfg(unix)]
 pub fn identities(socket: &Path) -> Vec<Vec<u8>> {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-
     if !socket.is_absolute() {
         return Vec::new();
     }
+    let (send, receive) = std::sync::mpsc::channel();
+    let socket = socket.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = send.send(ask(&socket));
+    });
+    receive.recv_timeout(WAIT).unwrap_or_default()
+}
+
+#[cfg(unix)]
+fn ask(socket: &Path) -> Vec<Vec<u8>> {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    let deadline = std::time::Instant::now() + WAIT;
     let Ok(mut stream) = UnixStream::connect(socket) else {
         return Vec::new();
     };
-    if stream.set_read_timeout(Some(WAIT)).is_err() || stream.set_write_timeout(Some(WAIT)).is_err()
+    if stream.set_write_timeout(Some(WAIT)).is_err() || stream.set_read_timeout(Some(WAIT)).is_err()
     {
         return Vec::new();
     }
@@ -45,7 +61,7 @@ pub fn identities(socket: &Path) -> Vec<Vec<u8>> {
         return Vec::new();
     }
     let mut length = [0u8; 4];
-    if stream.read_exact(&mut length).is_err() {
+    if read_by(&mut stream, &mut length, deadline).is_none() {
         return Vec::new();
     }
     let length = u32::from_be_bytes(length) as usize;
@@ -53,10 +69,30 @@ pub fn identities(socket: &Path) -> Vec<Vec<u8>> {
         return Vec::new();
     }
     let mut answer = vec![0u8; length];
-    if stream.read_exact(&mut answer).is_err() {
+    if read_by(&mut stream, &mut answer, deadline).is_none() {
         return Vec::new();
     }
     parse(&answer).unwrap_or_default()
+}
+
+/// Fill `buffer` from `stream`, or give up once `deadline` has passed between two reads.
+#[cfg(unix)]
+fn read_by(
+    stream: &mut std::os::unix::net::UnixStream,
+    buffer: &mut [u8],
+    deadline: std::time::Instant,
+) -> Option<()> {
+    use std::io::Read;
+    let mut filled = 0;
+    while filled < buffer.len() {
+        // The timeout on the stream bounds one read, and this bounds the bytes that trickle in.
+        deadline.checked_duration_since(std::time::Instant::now())?;
+        match stream.read(&mut buffer[filled..]) {
+            Ok(0) | Err(_) => return None,
+            Ok(read) => filled += read,
+        }
+    }
+    Some(())
 }
 
 /// No agent is asked on a platform without unix sockets.
@@ -107,22 +143,28 @@ pub(crate) mod fake {
         Nothing,
         /// Bytes that are not an identities answer.
         Garbage,
+        /// It takes the connection and never answers.
+        Silent,
     }
 
-    /// A listening socket that answers until the process ends and removes its file on drop.
+    /// A listening socket that answers until the process ends, in a directory of its own that is
+    /// removed on drop.
     pub(crate) struct FakeAgent {
+        directory: PathBuf,
         socket: PathBuf,
     }
 
     impl FakeAgent {
-        /// The socket is under the system temporary directory, since a path under `target/` can
-        /// be longer than a socket path may be.
+        /// The directory is under the checkout's scratch directory, so the socket path stays
+        /// short enough to bind.
         pub(crate) fn answering(name: &str, answer: Answer) -> Self {
-            let socket =
-                std::env::temp_dir().join(format!("bb-{}-{name}.sock", std::process::id()));
-            let _ = std::fs::remove_file(&socket);
+            let directory = crate::testutil::scratch_dir(&format!("agent-{name}"));
+            let _ = std::fs::remove_dir_all(&directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            let socket = directory.join("s");
             let listener = UnixListener::bind(&socket).unwrap();
             std::thread::spawn(move || {
+                let mut kept = Vec::new();
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { continue };
                     let mut request = [0u8; 5];
@@ -131,6 +173,10 @@ pub(crate) mod fake {
                     }
                     let body = match &answer {
                         Answer::Nothing => continue,
+                        Answer::Silent => {
+                            kept.push(stream);
+                            continue;
+                        }
                         Answer::Garbage => vec![5, 1, 2],
                         Answer::Holding(keys) => {
                             let mut body = vec![12];
@@ -149,7 +195,7 @@ pub(crate) mod fake {
                     let _ = stream.write_all(&reply);
                 }
             });
-            Self { socket }
+            Self { directory, socket }
         }
 
         pub(crate) fn socket(&self) -> &Path {
@@ -159,7 +205,7 @@ pub(crate) mod fake {
 
     impl Drop for FakeAgent {
         fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.socket);
+            let _ = std::fs::remove_dir_all(&self.directory);
         }
     }
 
@@ -201,6 +247,16 @@ mod tests {
         ] {
             assert!(identities(socket).is_empty(), "{}", socket.display());
         }
+    }
+
+    /// SANDBOX-16: an agent that takes the connection and never answers holds nothing, and the
+    /// question stops waiting after the time allowed.
+    #[test]
+    fn an_agent_that_never_answers_holds_nothing_after_the_wait() {
+        let agent = FakeAgent::answering("silent", Answer::Silent);
+        let asked = std::time::Instant::now();
+        assert!(identities(agent.socket()).is_empty());
+        assert!(asked.elapsed() < WAIT * 2, "{:?}", asked.elapsed());
     }
 
     /// SANDBOX-16: an answer that claims more keys than it carries holds nothing rather than the

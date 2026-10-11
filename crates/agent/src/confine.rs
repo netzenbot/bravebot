@@ -690,8 +690,8 @@ impl Confinement {
             if self.reads_the_machine() {
                 policy = Toolchain::grant_every_cache(policy, self.prelude, home);
             }
-            // The agent a stage is lent is the one its own environment names, and it is asked for
-            // the keys it holds.
+            // A step with an assignment in front carries no scope, so this is the socket the
+            // process started with, and never one the plan chose.
             let place = signing::Place {
                 agent: variable(environment, "SSH_AUTH_SOCK").map(PathBuf::from),
                 ..self.place.clone()
@@ -4248,8 +4248,7 @@ mod tests {
             format!("ssh-ed25519 {HELD} comment\n"),
         )
         .unwrap();
-        let socket = std::env::temp_dir().join(format!("bb-{}-holds.sock", std::process::id()));
-        let _ = std::fs::remove_file(&socket);
+        let socket = home.join("s");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
@@ -4290,7 +4289,6 @@ mod tests {
         assert!(held(&policy, "keys/work.pub"));
         assert!(!held(&policy, ".ssh/repo.pub"));
 
-        let _ = std::fs::remove_file(&socket);
         std::fs::remove_dir_all(&home).unwrap();
     }
 
