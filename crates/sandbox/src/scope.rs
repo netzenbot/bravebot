@@ -156,15 +156,18 @@ impl Scope {
                     policy = policy.allow_read(public_key);
                 }
                 // A pull that merges or rebases signs the commit it makes.
-                if let Some(key) = crate::signing::read(home, place).file() {
+                for key in crate::signing::lent(home, place) {
                     policy = policy.allow_read(key);
                 }
                 policy.allow_write_file(under(home, KNOWN_HOSTS))
             }
-            Self::Signing => match crate::signing::read(home, place).file() {
-                Some(key) => policy.allow_read(key),
-                None => policy,
-            },
+            Self::Signing => {
+                let mut policy = policy;
+                for key in crate::signing::lent(home, place) {
+                    policy = policy.allow_read(key);
+                }
+                policy
+            }
             Self::Aws | Self::Kubernetes | Self::Docker => {
                 let mut policy = policy;
                 for row in rows(self) {
@@ -2105,6 +2108,39 @@ mod tests {
                 "{private}"
             );
         }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a `.pub` in `~/.ssh` whose key the agent holds is read by the signing scope and
+    /// by the remote scope, and the private key and a `.pub` for a key the agent lacks are not.
+    #[test]
+    #[cfg(unix)]
+    fn the_scopes_that_sign_read_a_public_key_in_ssh_that_the_agent_holds() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home = a_home_that_signs("signing-held-grant");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let line = |seed: u8| format!("ssh-ed25519 {} c\n", crate::signing::base64(&key(seed)));
+        std::fs::write(home.join(".ssh/repo.pub"), line(2)).unwrap();
+        std::fs::write(home.join(".ssh/unheld.pub"), line(3)).unwrap();
+        std::fs::write(home.join(".ssh/repo"), "a private key").unwrap();
+        let agent = FakeAgent::answering("signing-held-grant", Answer::Holding(vec![key(2)]));
+        let place = Place {
+            agent: Some(agent.socket().to_path_buf()),
+            ..Place::default()
+        };
+        for scope in [Scope::Signing, Scope::Remote] {
+            let granted = granted_paths(&scope.grant(SandboxPolicy::strict(), &home, &place));
+            assert!(granted.contains(&home.join("keys/work.pub")), "{scope:?}");
+            assert!(granted.contains(&home.join(".ssh/repo.pub")), "{scope:?}");
+            assert!(
+                !granted.contains(&home.join(".ssh/unheld.pub")),
+                "{scope:?}"
+            );
+            assert!(!granted.contains(&home.join(".ssh/repo")), "{scope:?}");
+        }
+        let alone =
+            granted_paths(&Scope::Signing.grant(SandboxPolicy::strict(), &home, &Place::default()));
+        assert_eq!(alone, [home.join("keys/work.pub")]);
         std::fs::remove_dir_all(&home).unwrap();
     }
 }

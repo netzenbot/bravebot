@@ -4,7 +4,8 @@
 //! `ssh-keygen -Y sign` with the file `user.signingkey` names. ssh-keygen reads that public key and
 //! asks the agent to sign with the private half, so the stage needs the one `.pub` file and the
 //! agent's socket, and never the private key. `docs/specs/sandboxing.md` (SANDBOX-16) decides what
-//! is read; this reads the two configuration files that can set it.
+//! is read; this reads the two configuration files that can set it, and names the `*.pub` files in
+//! `~/.ssh` whose key the agent holds, which a repository's own `user.signingkey` can name.
 //!
 //! Only the person's own files are read, `~/.gitconfig` and `~/.config/git/config`, as the
 //! `IdentityFile` lines of `~/.ssh/config` are. A repository's configuration, an `[include]` and an
@@ -64,6 +65,129 @@ pub struct Place {
     /// Every directory the session may write. A file inside one is a file the plan can write, and
     /// is never read as an included configuration.
     pub sessions: Vec<PathBuf>,
+    /// The socket of the ssh agent the stage is lent, where it is lent one. The agent is asked
+    /// which keys it holds, and a `.pub` file in `~/.ssh` that names one is lent beside the
+    /// configured key.
+    pub agent: Option<PathBuf>,
+}
+
+/// The most `.pub` files lent because the agent holds their key.
+const HELD_KEYS_LIMIT: usize = 32;
+
+/// The most bytes read from one `.pub` file.
+const PUBLIC_KEY_LIMIT: u64 = 16 * 1024;
+
+/// Every public key file a stage that signs reads, where signing is on.
+///
+/// That is the file `user.signingkey` names in the person's own configuration, and every `*.pub`
+/// file directly inside `~/.ssh` whose key the agent at `place.agent` holds. A repository's own
+/// `user.signingkey` can name a key the person's configuration does not, and the repository's
+/// configuration is not read, because a plan can write it. The agent already signs with any key it
+/// holds for a stage that reaches its socket, so a file that only names one of them lends the
+/// stage nothing the socket does not.
+///
+/// With no agent, one that does not answer, or `gpg.format` other than `ssh`, this is the
+/// configured key alone, or nothing.
+pub fn lent(home: &Path, place: &Place) -> Vec<PathBuf> {
+    let signing = read(home, place);
+    if !signing.enabled {
+        return Vec::new();
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Key::File(file) = &signing.key {
+        files.push(file.clone());
+    }
+    if let Some(socket) = place.agent.as_deref() {
+        for file in held_public_keys(home, socket) {
+            if !files.contains(&file) {
+                files.push(file);
+            }
+        }
+    }
+    files
+}
+
+/// The `*.pub` files directly inside `~/.ssh` whose key the agent at `socket` holds, at most
+/// [`HELD_KEYS_LIMIT`] of them, in the order of their names.
+///
+/// A file is lent only where `judged_public_key` accepts it, as for an `IdentityFile` line: a
+/// regular file named `*.pub` once a link is followed, outside every other credential location. A
+/// private key is never named `*.pub` here, and no file is lent for what it holds.
+fn held_public_keys(home: &Path, socket: &Path) -> Vec<PathBuf> {
+    let held: Vec<String> = crate::agent::identities(socket)
+        .iter()
+        .map(|key| base64(key))
+        .collect();
+    if held.is_empty() {
+        return Vec::new();
+    }
+    let Ok(directory) = std::fs::read_dir(under(home, ".ssh")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<PathBuf> = directory
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ending| ending == "pub"))
+        .collect();
+    names.sort();
+    let mut files: Vec<PathBuf> = Vec::new();
+    for name in names {
+        let Some(file) = crate::scope::judged_public_key(&name, home) else {
+            continue;
+        };
+        if files.contains(&file) || !names_a_held_key(&file, &held) {
+            continue;
+        }
+        files.push(file);
+        if files.len() == HELD_KEYS_LIMIT {
+            break;
+        }
+    }
+    files
+}
+
+/// Whether the first line of the public key file `file` is a key in `held`, each in the base64
+/// form a `.pub` file writes it.
+fn names_a_held_key(file: &Path, held: &[String]) -> bool {
+    use std::io::Read;
+    let Ok(opened) = std::fs::File::open(file) else {
+        return false;
+    };
+    let mut text = Vec::new();
+    if opened
+        .take(PUBLIC_KEY_LIMIT)
+        .read_to_end(&mut text)
+        .is_err()
+    {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(&text) else {
+        return false;
+    };
+    let mut fields = text.lines().next().unwrap_or_default().split_whitespace();
+    let (Some(_kind), Some(key)) = (fields.next(), fields.next()) else {
+        return false;
+    };
+    held.iter().any(|held| held == key)
+}
+
+/// The standard base64 of `bytes`, with padding, as a `.pub` file writes a key.
+pub(crate) fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for group in bytes.chunks(3) {
+        let word = (u32::from(group[0]) << 16)
+            | (u32::from(*group.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*group.get(2).unwrap_or(&0));
+        for (index, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            if index <= group.len() {
+                text.push(ALPHABET[(word >> shift & 63) as usize] as char);
+            } else {
+                text.push('=');
+            }
+        }
+    }
+    text
 }
 
 /// The signing configuration of the account whose home is `home`, for a run at `place`.
@@ -596,6 +720,7 @@ mod tests {
         Place {
             directory: Some(directory.clone()),
             sessions: vec![directory],
+            ..Place::default()
         }
     }
 
@@ -643,6 +768,7 @@ mod tests {
         let place = Place {
             directory: Some(elsewhere.clone()),
             sessions: vec![elsewhere],
+            ..Place::default()
         };
         assert_eq!(the_key_read(&home, &place), "default.pub");
         std::fs::remove_dir_all(&home).unwrap();
@@ -752,6 +878,7 @@ mod tests {
             let place = Place {
                 directory: Some(directory.clone()),
                 sessions: vec![directory],
+                ..Place::default()
             };
             assert_eq!(the_key_read(&home, &place), "default.pub", "{condition}");
             std::fs::remove_dir_all(&home).unwrap();
@@ -771,6 +898,7 @@ mod tests {
         let place_at = |name: &std::ffi::OsStr| Place {
             directory: Some(home.join("work").join(name)),
             sessions: Vec::new(),
+            ..Place::default()
         };
         let spelled_out = place_at(std::ffi::OsStr::new("\u{FFFD}project"));
         assert_eq!(the_key_read(&home, &spelled_out), "work.pub");
@@ -981,5 +1109,212 @@ mod tests {
             assert_eq!(glob(pattern, text, false), expected, "{pattern} {text}");
         }
         assert!(glob("/a/B", "/a/b", true));
+    }
+
+    /// A `.pub` line for the ed25519 key whose bytes are all `seed`.
+    fn public_key_line(seed: u8) -> String {
+        format!(
+            "ssh-ed25519 {} comment\n",
+            base64(&crate::agent::fake::key(seed))
+        )
+    }
+
+    /// A home whose own configuration signs with `~/keys/work.pub`, plus `~/.ssh/<name>.pub` for
+    /// each of `held_names`, holding the key of that seed.
+    fn a_home_with_ssh_public_keys(name: &str, files: &[(&str, u8)]) -> PathBuf {
+        let home = a_home_signing_with(
+            name,
+            "[gpg]\nformat = ssh\n[user]\n\tsigningkey = ~/keys/work.pub\n",
+            &["keys/work.pub"],
+        );
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        for (file, seed) in files {
+            std::fs::write(home.join(".ssh").join(file), public_key_line(*seed)).unwrap();
+        }
+        home
+    }
+
+    fn a_place_with(agent: &crate::agent::fake::FakeAgent) -> Place {
+        Place {
+            agent: Some(agent.socket().to_path_buf()),
+            ..Place::default()
+        }
+    }
+
+    fn file_names(files: Vec<PathBuf>) -> Vec<String> {
+        files
+            .iter()
+            .map(|file| file.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// SANDBOX-16: a `.pub` in `~/.ssh` whose key the agent holds is lent beside the configured
+    /// key, so a repository that sets `user.signingkey` to it signs.
+    #[test]
+    fn a_public_key_in_ssh_that_the_agent_holds_is_lent_beside_the_configured_key() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home = a_home_with_ssh_public_keys("lent-held", &[("repo.pub", 2)]);
+        let agent = FakeAgent::answering("lent-held", Answer::Holding(vec![key(2)]));
+        let lent = lent(&home, &a_place_with(&agent));
+        assert_eq!(file_names(lent.clone()), ["work.pub", "repo.pub"]);
+        assert_eq!(lent[1], home.join(".ssh/repo.pub"));
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a `.pub` in `~/.ssh` for a key the agent does not hold is not lent, since the
+    /// agent could not sign with it, and a key the agent holds that no `.pub` names lends nothing.
+    #[test]
+    fn a_public_key_in_ssh_that_the_agent_does_not_hold_is_not_lent() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home =
+            a_home_with_ssh_public_keys("lent-not-held", &[("held.pub", 2), ("other.pub", 3)]);
+        let agent = FakeAgent::answering("lent-not-held", Answer::Holding(vec![key(2), key(9)]));
+        assert_eq!(
+            file_names(lent(&home, &a_place_with(&agent))),
+            ["work.pub", "held.pub"]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: with no agent socket, one nothing listens at, one that closes the connection,
+    /// or one that answers with something else, only the configured key is lent.
+    #[test]
+    fn with_no_agent_that_answers_only_the_configured_key_is_lent() {
+        use crate::agent::fake::{Answer, FakeAgent};
+        let home = a_home_with_ssh_public_keys("lent-no-agent", &[("repo.pub", 2)]);
+        let closed = FakeAgent::answering("lent-closed", Answer::Nothing);
+        let garbage = FakeAgent::answering("lent-garbage", Answer::Garbage);
+        let missing = Place {
+            agent: Some(home.join("no-agent.sock")),
+            ..Place::default()
+        };
+        for place in [
+            Place::default(),
+            missing,
+            a_place_with(&closed),
+            a_place_with(&garbage),
+        ] {
+            assert_eq!(file_names(lent(&home, &place)), ["work.pub"], "{place:?}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: which files are lent does not depend on the repository's configuration, which
+    /// a plan can write. Changing the repository's `user.signingkey`, or giving it one that names
+    /// a file the agent does not hold, changes nothing.
+    #[test]
+    fn the_repositorys_signing_key_does_not_change_which_files_are_lent() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home = a_home_with_ssh_public_keys("lent-repo", &[("repo.pub", 2), ("other.pub", 3)]);
+        let agent = FakeAgent::answering("lent-repo", Answer::Holding(vec![key(2)]));
+        let project = home.join("work/project");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        let place = Place {
+            directory: Some(project.clone()),
+            sessions: vec![project.clone()],
+            ..a_place_with(&agent)
+        };
+        let before = lent(&home, &place);
+        for named in ["~/.ssh/repo.pub", "~/.ssh/other.pub", "~/.ssh/id_ed25519"] {
+            std::fs::write(
+                project.join(".git/config"),
+                format!("[user]\n\tsigningkey = {named}\n"),
+            )
+            .unwrap();
+            assert_eq!(lent(&home, &place), before, "{named}");
+        }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a private key beside a matching `.pub` is never lent, whatever the agent holds,
+    /// and neither is a file that is not named `*.pub`.
+    #[test]
+    fn a_private_key_beside_a_matching_public_key_is_never_lent() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home = a_home_with_ssh_public_keys("lent-private", &[("id_ed25519.pub", 2)]);
+        std::fs::write(home.join(".ssh/id_ed25519"), public_key_line(2)).unwrap();
+        std::fs::write(home.join(".ssh/copy"), public_key_line(2)).unwrap();
+        let agent = FakeAgent::answering("lent-private", Answer::Holding(vec![key(2)]));
+        assert_eq!(
+            file_names(lent(&home, &a_place_with(&agent))),
+            ["work.pub", "id_ed25519.pub"]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: where the person's git does not sign with ssh, nothing is lent for a key the
+    /// agent holds.
+    #[test]
+    fn nothing_is_lent_where_git_does_not_sign_with_ssh() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home = a_home_with_ssh_public_keys("lent-not-ssh", &[("repo.pub", 2)]);
+        std::fs::write(
+            home.join(".gitconfig"),
+            "[user]\n\tsigningkey = ~/keys/work.pub\n",
+        )
+        .unwrap();
+        let agent = FakeAgent::answering("lent-not-ssh", Answer::Holding(vec![key(2)]));
+        assert!(lent(&home, &a_place_with(&agent)).is_empty());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a link in `~/.ssh` is followed only where the file it leads to is a `.pub`
+    /// outside every other credential location, and a `.pub` in a directory beneath `~/.ssh` is
+    /// not among the files directly inside it.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_into_another_credential_location_and_a_nested_file_are_not_lent() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let home = a_home_with_ssh_public_keys("lent-links", &[("plain.pub", 2)]);
+        std::fs::create_dir_all(home.join(".aws")).unwrap();
+        std::fs::write(home.join(".aws/aws.pub"), public_key_line(3)).unwrap();
+        std::os::unix::fs::symlink(home.join(".aws/aws.pub"), home.join(".ssh/aws.pub")).unwrap();
+        std::os::unix::fs::symlink(home.join("keys/work.pub"), home.join(".ssh/link.pub")).unwrap();
+        std::fs::create_dir_all(home.join(".ssh/nested")).unwrap();
+        std::fs::write(home.join(".ssh/nested/deep.pub"), public_key_line(4)).unwrap();
+        let agent =
+            FakeAgent::answering("lent-links", Answer::Holding(vec![key(2), key(3), key(4)]));
+        assert_eq!(
+            file_names(lent(&home, &a_place_with(&agent))),
+            ["work.pub", "plain.pub"]
+        );
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: at most 32 files are lent because the agent holds their key.
+    #[test]
+    fn no_more_than_thirty_two_files_are_lent_for_held_keys() {
+        use crate::agent::fake::{Answer, FakeAgent, key};
+        let names: Vec<String> = (0..40)
+            .map(|number| format!("key{number:02}.pub"))
+            .collect();
+        let files: Vec<(&str, u8)> = names
+            .iter()
+            .enumerate()
+            .map(|(number, name)| (name.as_str(), number as u8))
+            .collect();
+        let home = a_home_with_ssh_public_keys("lent-limit", &files);
+        let held = (0..40).map(key).collect();
+        let agent = FakeAgent::answering("lent-limit", Answer::Holding(held));
+        let lent = lent(&home, &a_place_with(&agent));
+        assert_eq!(lent.len(), 1 + 32);
+        assert_eq!(file_names(lent)[32], "key31.pub");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A key written in base64 is what a `.pub` file holds for the key's wire form.
+    #[test]
+    fn base64_pads_the_way_a_public_key_file_does() {
+        for (bytes, text) in [
+            (&b""[..], ""),
+            (b"f", "Zg=="),
+            (b"fo", "Zm8="),
+            (b"foo", "Zm9v"),
+            (b"foob", "Zm9vYg=="),
+            (b"fooba", "Zm9vYmE="),
+            (b"foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64(bytes), text);
+        }
     }
 }

@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod agent;
 pub mod base;
 pub mod crash;
 pub mod hosts;
