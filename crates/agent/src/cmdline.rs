@@ -231,8 +231,6 @@ pub enum Reason {
     Unclosed(char),
     /// A `NAME=` whose value is not literal text.
     AssignmentValue,
-    /// A pattern that matched no file.
-    NoMatch,
     /// A word standing for more arguments than a person can be shown at one prompt.
     TooMany { found: usize, cap: usize },
     /// A walk that read more directories than the ceiling allows.
@@ -300,9 +298,6 @@ impl fmt::Display for Reason {
             Self::Unclosed(c) => write!(f, "`{c}` is never closed"),
             Self::AssignmentValue => f.write_str(
                 "an assignment's value must be literal text, so that the plan shows what the program will see",
-            ),
-            Self::NoMatch => f.write_str(
-                "matched no file. A pattern standing for nothing is not an argument, so there is no plan to show",
             ),
             Self::TooMany { found, cap } => write!(
                 f,
@@ -1378,9 +1373,10 @@ pub fn expand(word: &Word, directory: &Path, home: Option<&Path>) -> Result<Vec<
         }
         let matched = walk(directory, &candidate).map_err(refused)?;
         if matched.is_empty() {
-            // Never the pattern itself. A shell passes an unmatched pattern through as an
-            // argument, and a plan showing one reads as a list of files.
-            return Err(refused(Reason::NoMatch));
+            // As a shell without failglob does, so `find . -name *.md` reaches `find` as written
+            // when no file here matches. The plan shows the word the program receives.
+            out.push(render(&candidate));
+            continue;
         }
         out.extend(matched);
     }
@@ -2778,16 +2774,17 @@ mod tests {
         );
     }
 
-    /// A pattern standing for nothing is not an argument. A shell hands the pattern through as
-    /// text, and that would put a plan in front of a person that reads as a list of files and is
-    /// not one.
+    /// A pattern matching no file is passed to the program as written, as a shell without
+    /// failglob does. The wrong implementation refuses it, or passes nothing at all.
     #[test]
-    fn a_pattern_matching_nothing_is_refused_rather_than_passed_through() {
+    fn a_pattern_matching_nothing_is_passed_through_as_written() {
         let tree = Tree::new("nothing");
         tree.file("a.rs");
-        let refusal = expansion_refused("ls *.zzz", 1, &tree.root);
-        assert_eq!(refusal.reason, Reason::NoMatch);
-        assert_eq!(refusal.text, "*.zzz");
+        assert_eq!(expanded("ls *.zzz", 1, &tree.root), ["*.zzz"]);
+        assert_eq!(
+            expanded("ls {*.rs,*.zzz}", 1, &tree.root),
+            ["a.rs", "*.zzz"]
+        );
     }
 
     /// `grep -r x . --include=*.md` is what a model writes and what a shell runs. The value
@@ -2834,24 +2831,42 @@ mod tests {
 
     /// Only an option carrying a value is the program's. A dash with no name before the `=`, a
     /// dash with no `=`, a pattern ahead of the `=` and a pattern naming a file are all still
-    /// looked up, so the plan never shows a pattern where a file list is expected. The wrong
-    /// implementation passes through any word that starts with a dash.
+    /// looked up, so a file matching one replaces it. The wrong implementation passes through any
+    /// word that starts with a dash.
     #[test]
     fn only_an_option_carrying_a_value_is_passed_through() {
-        let tree = Tree::new("option-value-bounds");
-        tree.file("a.rs");
-        for (line, text) in [
-            ("ls -*.md", "-*.md"),
-            ("ls -=*.md", "-=*.md"),
-            ("ls --=*.md", "--=*.md"),
-            ("ls *=x", "*=x"),
-            ("ls --in*=x", "--in*=x"),
-            ("ls *.md", "*.md"),
-        ] {
-            let refusal = expansion_refused(line, 1, &tree.root);
-            assert_eq!(refusal.reason, Reason::NoMatch, "{line}");
-            assert_eq!(refusal.text, text, "{line}");
+        for (i, (line, file)) in [
+            ("ls -*.md", "-a.md"),
+            ("ls -=*.md", "-=a.md"),
+            ("ls --=*.md", "--=a.md"),
+            ("ls *=x", "a=x"),
+            ("ls --in*=x", "--include=x"),
+            ("ls *.md", "a.md"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let tree = Tree::new(&format!("option-value-bounds-{i}"));
+            tree.file(file);
+            assert_eq!(expanded(line, 1, &tree.root), [file], "{line}");
         }
+    }
+
+    /// `find . -name *.md` is what a model writes for `find`'s own pattern. With no `.md` file
+    /// where it runs, `find` receives the pattern. With one, the word becomes that file, as it
+    /// would in a shell, which is why a pattern meant for the program is quoted.
+    #[test]
+    fn a_pattern_for_find_matching_nothing_here_reaches_find_as_written() {
+        let tree = Tree::new("find-pattern");
+        tree.file("a.rs").file("sub/b.md");
+        let plan = compiled("find . -name *.md", &tree.root);
+        assert_eq!(plan.steps.steps()[0].args, [".", "-name", "*.md"]);
+
+        tree.file("a.md");
+        let plan = compiled("find . -name *.md", &tree.root);
+        assert_eq!(plan.steps.steps()[0].args, [".", "-name", "a.md"]);
+        let plan = compiled("find . -name '*.md'", &tree.root);
+        assert_eq!(plan.steps.steps()[0].args, [".", "-name", "*.md"]);
     }
 
     /// An approval prompt long enough that nobody reads it is a prompt that grants everything and
@@ -3169,8 +3184,8 @@ mod tests {
             Reason::NotOneProgram
         );
         // Nested in braces as well, where the word carries no pattern at the top level. This one
-        // is refused by the rule rather than by whatever the expansion of the branches happened to
-        // say, which for a branch matching nothing would be that the pattern found no file.
+        // is refused by the rule rather than by what the branches happen to expand to, which here
+        // is one file and one pattern matching nothing.
         assert_eq!(
             compile_refused("./{scr*.sh,other*.sh} --flag", &tree.root).reason,
             Reason::NotOneProgram
