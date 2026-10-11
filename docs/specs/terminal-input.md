@@ -1116,7 +1116,9 @@ from disk opens with what the last request of the session it read came to. A tur
 what each round's request came to as the round completes, so the first turn of a session reads a
 figure before it ends. A turn that failed after sending a request reports what that request came
 to. A turn that sent nothing leaves the reading where it was, which for a session that has sent
-nothing at all is absent.
+nothing at all is absent. A compaction partway through a turn reports no figure, since the last
+request measured the conversation the summary replaced, and the reading is next taken when the
+round after it completes.
 
 **Why.** This reading is what a person uses to decide whether to compact, and it is the only
 account of the size of a conversation that exists here: the server reports what a request cost and
@@ -1147,6 +1149,7 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::app::a_turn_in_flight_reads_how_full_the_context_is_after_its_first_round`
 `verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_reading_with_what_its_request_came_to`
 `verified-by: bravebot_tui::app::a_round_that_reports_no_request_leaves_the_reading_where_it_was`
+`verified-by: bravebot_agent::turn::a_compaction_reports_no_context_figure_for_the_conversation_it_replaced`
 `verified-by: bravebot_tui::render::the_hint_line_says_how_full_the_context_is`
 `verified-by: bravebot_tui::render::the_hint_line_marks_a_guessed_budget`
 `verified-by: bravebot_tui::render::the_hint_line_reports_a_compacted_context`

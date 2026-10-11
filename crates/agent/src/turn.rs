@@ -4238,10 +4238,11 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
                                 tokens += done.usage.total();
                                 output_tokens += done.usage.completion_tokens;
                                 cached.add(done.usage.cached);
+                                // The figure measured the conversation the summary replaced.
                                 reporter.spent(crate::outcome::Spent {
                                     tokens,
                                     output_tokens,
-                                    context_tokens,
+                                    context_tokens: 0,
                                     cached,
                                     timing: spent.finish(),
                                 });

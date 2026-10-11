@@ -28077,8 +28077,8 @@ mod tests {
         assert_eq!(crate::render::context_reading(&session), "context 48%");
     }
 
-    /// A report sent before any request of the turn completed carries no figure. It must not
-    /// replace a compaction's account of the room it won back, or an earlier turn's reading.
+    /// A report that carries no figure, as a compaction's does, must not replace a compaction's
+    /// account of the room it won back, or an earlier turn's reading.
     #[test]
     fn a_round_that_reports_no_request_leaves_the_reading_where_it_was() {
         let mut compacted = Session::new("none");
