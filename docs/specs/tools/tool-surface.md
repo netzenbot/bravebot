@@ -7,7 +7,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 228
+      - crates/agent/src/tools.rs: 232
   - symbol: Produced::refused_with_a_note
     sites:
       - crates/agent/src/tools.rs: 8

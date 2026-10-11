@@ -34,11 +34,11 @@ guards:
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
-      - crates/agent/src/tools.rs: 38
+      - crates/agent/src/tools.rs: 39
       - crates/agent/src/turn.rs: 5
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 54
+      - crates/agent/tests/workspace.rs: 55
       - crates/aichat/tests/client.rs: 2
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 63
@@ -114,7 +114,7 @@ guards:
       - crates/agent/src/mcp.rs: 2
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
-      - crates/agent/src/tools.rs: 31
+      - crates/agent/src/tools.rs: 32
       - crates/agent/src/turn.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::render_pair_in_place
@@ -142,7 +142,7 @@ guards:
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
-      - crates/agent/src/tools.rs: 14
+      - crates/agent/src/tools.rs: 15
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 5
   - symbol: Policy::decode_transport
