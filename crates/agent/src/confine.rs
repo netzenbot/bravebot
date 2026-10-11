@@ -4230,19 +4230,13 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// SANDBOX-16: a stage that signs is lent a `.pub` in `~/.ssh` whose key the agent named by the
-    /// stage's own `SSH_AUTH_SOCK` holds, so a repository's `user.signingkey` can name it. With no
-    /// such variable, or an agent that does not hold the key, only the configured key is lent.
-    #[test]
+    /// The base64 of the key `an_agent_holding_the_repo_key` holds, which `~/.ssh/repo.pub` names.
+    const HELD: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
+
+    /// Writes `~/.ssh/repo.pub` and starts an agent at `<home>/s` that holds the key it names.
     #[cfg(unix)]
-    fn a_stage_that_signs_is_lent_a_public_key_in_ssh_that_its_agent_holds() {
+    fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
-        const HELD: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
-        let (home, confined) = a_confinement_over_a_home_that(
-            "holds",
-            SIGNS_WITH_A_KEY,
-            &["keys/work.pub", ".ssh/unheld.pub"],
-        );
         std::fs::write(
             home.join(".ssh/repo.pub"),
             format!("ssh-ed25519 {HELD} comment\n"),
@@ -4271,6 +4265,21 @@ mod tests {
                 let _ = stream.write_all(&reply);
             }
         });
+        socket
+    }
+
+    /// SANDBOX-16: a stage that signs is lent a `.pub` in `~/.ssh` whose key the agent named by the
+    /// stage's own `SSH_AUTH_SOCK` holds, so a repository's `user.signingkey` can name it. With no
+    /// such variable, or an agent that does not hold the key, only the configured key is lent.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_is_lent_a_public_key_in_ssh_that_its_agent_holds() {
+        let (home, confined) = a_confinement_over_a_home_that(
+            "holds",
+            SIGNS_WITH_A_KEY,
+            &["keys/work.pub", ".ssh/unheld.pub"],
+        );
+        let socket = an_agent_holding_the_repo_key(&home);
         let step = step("/usr/bin/git", &["commit", "-m", "x"]);
         let held =
             |policy: &SandboxPolicy, file: &str| reads(policy, home.join(file).to_str().unwrap());
@@ -4289,6 +4298,57 @@ mod tests {
         assert!(held(&policy, "keys/work.pub"));
         assert!(!held(&policy, ".ssh/repo.pub"));
 
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: each way a stage comes to carry the signing scope (an argv that names a signing
+    /// operation, a request from a script, and the remote scope a person remembered, which lends the same keys) lends the `.pub` in `~/.ssh`
+    /// whose key the agent holds, and none lends one it does not hold.
+    #[test]
+    #[cfg(unix)]
+    fn every_way_to_carry_the_signing_scope_lends_the_public_key_the_agent_holds() {
+        use bravebot_sandbox::scope::Requested;
+        let (home, confined) = a_confinement_over_a_home_that(
+            "holds-each-way",
+            SIGNS_WITH_A_KEY,
+            &["keys/work.pub", ".ssh/unheld.pub"],
+        );
+        let socket = an_agent_holding_the_repo_key(&home);
+        let environment = vec![(
+            "SSH_AUTH_SOCK".to_string(),
+            socket.to_str().unwrap().to_string(),
+        )];
+        let script = step("/bin/sh", &["-c", "git -c core.editor=true rebase main"]);
+        let carried = (
+            confined.clone(),
+            step("/usr/bin/git", &["commit", "-m", "x"]),
+        );
+        let requested = (
+            confined
+                .clone()
+                .with_requested(&[Requested::Scope(Scope::Signing)]),
+            script.clone(),
+        );
+        let from_memory = (
+            confined.clone().with_grants(vec![remembered(
+                "/bin/sh",
+                None,
+                a_scope("remote"),
+                false,
+            )]),
+            step("/bin/sh", &[]),
+        );
+        for (way, (confinement, step)) in [
+            ("carried", carried),
+            ("requested", requested),
+            ("remembered", from_memory),
+        ] {
+            let policy = confinement.policy(&step, Path::new("/work/project"), &environment);
+            let lent = |file: &str| reads(&policy, home.join(file).to_str().unwrap());
+            assert!(lent("keys/work.pub"), "{way}");
+            assert!(lent(".ssh/repo.pub"), "{way}");
+            assert!(!lent(".ssh/unheld.pub"), "{way}");
+        }
         std::fs::remove_dir_all(&home).unwrap();
     }
 

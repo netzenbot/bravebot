@@ -913,6 +913,7 @@ be told from one the scope never reached.
 `verified-by: bravebot_sandbox::scope::the_scopes_that_sign_read_a_public_key_in_ssh_that_the_agent_holds`
 `verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_a_public_key_the_agent_holds_and_no_other`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_a_public_key_in_ssh_that_its_agent_holds`
+`verified-by: bravebot_agent::confine::every_way_to_carry_the_signing_scope_lends_the_public_key_the_agent_holds`
 `verified-by: bravebot_sandbox::signing::a_glob_matches_by_path_part`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_and_the_agent_where_the_person_signs_with_ssh`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_carries_nothing_where_the_person_does_not_sign_with_ssh`
