@@ -848,11 +848,18 @@ impl Bridge {
     /// `off` is refused here whatever the settings say (SANDBOX-22). The managed file is a floor, and
     /// is read again when the turn starts. A turn already running keeps the mode it began with.
     fn set_sandbox_mode(&mut self, request: &Request) -> Result<Value, Failure> {
+        self.set_sandbox_mode_under(request, &bravebot_config::Managed::load())
+    }
+
+    /// As [`Bridge::set_sandbox_mode`], under the managed layer `managed`, so a test can pin one.
+    fn set_sandbox_mode_under(
+        &mut self,
+        request: &Request,
+        managed: &bravebot_config::Managed,
+    ) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let mode = wire::sandbox_mode(request.param("mode"))?;
-        if let Err(refused) =
-            bravebot_config::sandbox::allowed_in_session(mode, &bravebot_config::Managed::load())
-        {
+        if let Err(refused) = bravebot_config::sandbox::allowed_in_session(mode, managed) {
             return Err(Failure::bad_request(wire::sandbox_refusal(&refused)));
         }
         let open = self
@@ -3099,6 +3106,61 @@ mod permissions_tests {
             ErrorCode::BadRequest
         );
         assert_eq!(bridge.dispatch(&list).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    /// SANDBOX-22: a managed `strict` pin is a floor a window cannot choose under. `strict` is
+    /// accepted, `standard` is a bad request, and the session keeps `strict`. The failure this
+    /// rejects is a window's choice that the managed file does not bind.
+    #[test]
+    fn a_managed_strict_pin_refuses_a_window_choosing_standard() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("managed.json");
+        std::fs::write(&file, r#"{"sandbox": {"mode": "strict"}}"#).unwrap();
+        let managed = bravebot_config::Managed::at(&file);
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let handle = bridge.mint(Open {
+            project: "/work".into(),
+            state: Arc::new(Mutex::new(State::fresh(TrustStore::new("/work")))),
+            answered_trust: true,
+            keeping: None,
+            running: None,
+            model: None,
+            watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            auto_vetting: false,
+            definition: None,
+            permission_mode: LiveMode::default(),
+            sandbox: None,
+        });
+        let choose = |mode: &str| {
+            Request::parse(
+                &json!({"id": 1, "method": "session.sandbox", "params": {
+                    "session": handle, "mode": mode
+                }})
+                .to_string(),
+            )
+            .unwrap()
+        };
+
+        assert_eq!(
+            bridge
+                .set_sandbox_mode_under(&choose("strict"), &managed)
+                .unwrap(),
+            json!({"sandboxMode": "strict"})
+        );
+        let refused = bridge
+            .set_sandbox_mode_under(&choose("standard"), &managed)
+            .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::BadRequest, "{}", refused.message);
+        assert_eq!(
+            bridge.open[&handle].sandbox,
+            Some(SandboxMode::Strict),
+            "the refused choice was kept"
+        );
     }
 }
 
