@@ -775,9 +775,9 @@ impl Confinement {
         )
     }
 
-    /// Whether a step of `steps` carries the signing scope, and then whether the person's
-    /// `user.signingkey` names a file no scope reads, so that the signature fails and the planner
-    /// is told why.
+    /// Whether a step of `steps` carries the signing scope or was asked to carry it, whether or
+    /// not the person's git signs with ssh, and then whether the person's `user.signingkey` names
+    /// a file no scope reads, so that the signature fails and the planner is told why.
     fn signing_state(&self, steps: &[&Step]) -> (bool, bool) {
         let Some(home) = self.home.as_deref() else {
             return (false, false);
@@ -793,7 +793,7 @@ impl Confinement {
         }
         let signing = signing::read(home, &self.place);
         (
-            signing.enabled,
+            true,
             signing.enabled && signing.key == signing::Key::Refused,
         )
     }
@@ -4255,6 +4255,9 @@ mod tests {
             home.join("keys/work.pub").to_str().unwrap()
         ));
         assert!(!writes(&policy, "/run/agent.sock"));
+        let line = asked.profile(&[&script]);
+        assert!(line.contains(SIGNING_KEY_SOURCE_SENTENCE), "{line}");
+        assert!(!line.contains(SIGNING_KEY_REFUSED_SENTENCE), "{line}");
         std::fs::remove_dir_all(&home).unwrap();
     }
 

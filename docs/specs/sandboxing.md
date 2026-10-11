@@ -738,8 +738,10 @@ matched as git matches it, against the `.git` inside the first directory of the 
 home, `./` is the directory of the file that holds the line, a pattern with none of `/`, `~/` and `./`
 before it is preceded by `**/`, a trailing `/` adds `**`, `*` and `?` stay inside one part of a path,
 `**` is any number of parts, and `gitdir/i` ignores case. A pattern holding `[` or `\` matches
-nothing. A `hasconfig:` and an `onbranch:` condition are not followed, because the first reads the
-repository's configuration and the second its state, and a linked worktree is matched by its own
+nothing, and so does a condition when the home, the directory of the file that holds the line or
+the session's first directory is not valid UTF-8. A `hasconfig:` and an `onbranch:` condition are
+not followed, because the first reads the repository's configuration and the second its state, and
+a linked worktree is matched by its own
 `.git` and not by the directory it links to. The file the `path` names, beside the including file
 where it is relative, is read only where it resolves to a regular file inside the home, outside every
 credential location other than `~/.ssh`, and outside every directory the session may write, which
@@ -748,9 +750,9 @@ be one the plan chose. A directory the person lets the session write later, by a
 grant, is not counted. An included file's own `[includeIf]` is not followed. The repository's own
 configuration is still not read, whatever it holds: a plan can write it, and the file it names is
 read on the strength of it. The profile line of a stage that carries the signing scope, or was asked
-to carry it, always says that the key comes from `~/.gitconfig` or `~/.config/git/config` or a file
-an `[includeIf]` of theirs includes for the directory, and that a `user.signingkey` set in a
-repository's own configuration is not read. The text is fixed: it holds no value from any
+to carry it, always says, whether or not the person's git signs with ssh, that the key comes from
+`~/.gitconfig` or `~/.config/git/config` or a file an `[includeIf]` of theirs includes for the
+directory, and that a `user.signingkey` set in a repository's own configuration is not read. The text is fixed: it holds no value from any
 configuration and does not change with the repository, so that a signature which fails with "Couldn't
 load public key" is traced to the setting by the planner without reading anything it was not lent.
 
@@ -871,6 +873,7 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_sandbox::signing::a_gitdir_condition_matches_as_git_matches_it`
 `verified-by: bravebot_sandbox::signing::a_gitdir_pattern_with_a_class_or_an_escape_matches_no_directory`
 `verified-by: bravebot_sandbox::signing::a_relative_include_path_is_beside_the_file_that_holds_it`
+`verified-by: bravebot_sandbox::signing::a_directory_that_is_not_utf8_matches_no_gitdir_pattern`
 `verified-by: bravebot_sandbox::signing::an_include_if_whose_file_is_inside_the_workspace_is_refused`
 `verified-by: bravebot_sandbox::signing::an_include_if_whose_file_is_not_a_plain_file_in_the_home_is_refused`
 `verified-by: bravebot_sandbox::signing::an_include_inside_an_included_file_and_a_plain_include_are_not_followed`
@@ -881,6 +884,7 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_agent::confine::a_stage_that_does_not_sign_is_not_lent_the_agent`
 `verified-by: bravebot_agent::confine::a_signing_key_no_scope_reads_is_explained_to_the_planner_without_its_path`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_always_told_where_the_key_comes_from`
+`verified-by: bravebot_agent::confine::a_stage_that_asked_for_signing_is_lent_the_key_and_the_agent`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_an_include_if_supplies_for_its_directory`
 `verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_the_public_key_and_reaches_the_agent_never_the_private_key`
 `verified-by: bravebot_sandbox::scope::the_ssh_configuration_adds_a_bounded_number_of_keys_to_the_remote_scope_alone`

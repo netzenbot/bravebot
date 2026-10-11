@@ -151,10 +151,17 @@ fn condition_holds(condition: &str, beside: &Path, home: &Path, place: &Place) -
     if pattern.is_empty() || pattern.len() > PATTERN_LIMIT || pattern.contains(['[', '\\']) {
         return false;
     }
+    // A path that is not UTF-8 has no spelling that stands for it alone, so it matches nothing.
     let mut pattern = if let Some(inside) = pattern.strip_prefix("~/") {
-        format!("{}/{inside}", spelled(home))
+        let Some(home) = spelled(home) else {
+            return false;
+        };
+        format!("{home}/{inside}")
     } else if let Some(inside) = pattern.strip_prefix("./") {
-        format!("{}/{inside}", spelled(beside))
+        let Some(beside) = spelled(beside) else {
+            return false;
+        };
+        format!("{beside}/{inside}")
     } else if pattern.starts_with('/') {
         pattern.to_string()
     } else {
@@ -173,19 +180,22 @@ fn condition_holds(condition: &str, beside: &Path, home: &Path, place: &Place) -
     ]
     .iter()
     .filter(|directory| !directory.as_os_str().is_empty())
-    .any(|directory| glob(&pattern, &spelled(&directory.join(".git")), insensitive))
+    .any(|directory| {
+        spelled(&directory.join(".git")).is_some_and(|text| glob(&pattern, &text, insensitive))
+    })
 }
 
 /// The longest `gitdir:` pattern read.
 const PATTERN_LIMIT: usize = 1024;
 
-/// `path` as the text git matches a pattern against: `/` between its parts.
-fn spelled(path: &Path) -> String {
-    let text = path.to_string_lossy().into_owned();
-    match cfg!(windows) {
+/// `path` as the text git matches a pattern against: `/` between its parts. None where the path is
+/// not UTF-8, since a lossy spelling would stand for every path that differs only in those bytes.
+fn spelled(path: &Path) -> Option<String> {
+    let text = path.to_str()?;
+    Some(match cfg!(windows) {
         true => text.replace('\\', "/"),
-        false => text,
-    }
+        false => text.to_string(),
+    })
 }
 
 /// Whether `text` matches `pattern` as git matches a `gitdir:` pattern: `*` and `?` stay inside
@@ -748,6 +758,27 @@ mod tests {
         }
     }
 
+    /// A directory whose name is not UTF-8 is not the directory whose lossy spelling has U+FFFD in
+    /// place of the bad byte, so a pattern naming the second one never selects a key for the first.
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_that_is_not_utf8_matches_no_gitdir_pattern() {
+        use std::os::unix::ffi::OsStrExt;
+        let home = a_home_with_a_work_key_behind(
+            "signing-gitdir-bytes",
+            "[includeIf \"gitdir:~/work/\u{FFFD}project/\"]\n\tpath = ~/.work-config\n",
+        );
+        let place_at = |name: &std::ffi::OsStr| Place {
+            directory: Some(home.join("work").join(name)),
+            sessions: Vec::new(),
+        };
+        let spelled_out = place_at(std::ffi::OsStr::new("\u{FFFD}project"));
+        assert_eq!(the_key_read(&home, &spelled_out), "work.pub");
+        let bad_byte = place_at(std::ffi::OsStr::from_bytes(b"\xFFproject"));
+        assert_eq!(the_key_read(&home, &bad_byte), "default.pub");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
     /// A relative `path` is beside the file that holds the line, whichever of the two global files
     /// it is.
     #[test]
@@ -764,10 +795,11 @@ mod tests {
             "[includeIf \"gitdir:~/work/\"]\n\tpath = work\n",
         )
         .unwrap();
+        std::fs::write(home.join(".gitconfig"), "[gpg]\nformat = ssh\n").unwrap();
         let place = a_run_in_the_work_project(&home);
-        // ~/.gitconfig is read after it and sets the default key, as git does.
-        assert_eq!(the_key_read(&home, &place), "default.pub");
+        assert_eq!(the_key_read(&home, &place), "work.pub");
 
+        std::fs::remove_file(home.join(".config/git/config")).unwrap();
         std::fs::write(
             home.join(".gitconfig"),
             "[gpg]\nformat = ssh\n[includeIf \"gitdir:~/work/\"]\n\tpath = .work-config\n",
