@@ -4230,13 +4230,11 @@ mod tests {
         std::fs::remove_dir_all(&home).unwrap();
     }
 
-    /// The base64 of the key `an_agent_holding_the_repo_key` holds, which `~/.ssh/repo.pub` names.
-    const HELD: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
-
     /// Writes `~/.ssh/repo.pub` and starts an agent at `<home>/s` that holds the key it names.
     #[cfg(unix)]
     fn an_agent_holding_the_repo_key(home: &Path) -> PathBuf {
         use std::io::{Read, Write};
+        const HELD: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
         std::fs::write(
             home.join(".ssh/repo.pub"),
             format!("ssh-ed25519 {HELD} comment\n"),
