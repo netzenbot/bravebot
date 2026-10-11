@@ -816,6 +816,23 @@ keys are. A configuration of the person's is read for it and a repository's is n
 repository's is a file the plan may write. `~/.bravebot` is refused the same way, since a
 variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](#SANDBOX-12)).
 
+A repository can set `user.signingkey` to a key the person's own configuration does not name, and
+the repository's configuration is not read, so a stage that signs with it cannot load that public key
+even though the agent it is lent holds the key. A stage that signs, and a stage with the remote scope
+for a person whose git signs with ssh, is therefore also lent every `*.pub` file directly inside
+`~/.ssh` whose key the agent holds. The agent named by the stage's own `SSH_AUTH_SOCK` is asked for
+its keys with the identities request of the agent protocol, and a file is lent where its first line
+holds one of them. The agent already signs with any key it holds for a stage that reaches its socket,
+so a file that only names one lends nothing the socket does not. What is lent does not depend on the
+repository's configuration, which stays unread. Each file gets the checks a file named by an
+`IdentityFile` gets: a regular file named `*.pub` once a link is followed, outside every credential
+location other than `~/.ssh`, never a private key, and at most 32 files. Where there is no
+`SSH_AUTH_SOCK`, nothing answers there within two seconds, or the answer is not an identities list,
+only the configured key is lent. Where `gpg.format` is not `ssh` in the person's own configuration
+nothing is lent. This adds no dependency and is not done on Windows. The prompt says so in the fixed
+sentence about the signing key, so that a signature that fails for a key the agent does not hold can
+be told from one the scope never reached.
+
 `verified-by: bravebot_sandbox::scope::an_operation_that_talks_to_a_remote_carries_the_remote_scope`
 `verified-by: bravebot_sandbox::scope::a_git_operation_that_talks_to_no_remote_carries_none`
 `verified-by: bravebot_sandbox::scope::a_gh_argv_that_runs_a_program_gh_did_not_write_carries_none`
@@ -878,6 +895,21 @@ variable that named it would lift the refusal of the gateway keys ([SANDBOX-12](
 `verified-by: bravebot_sandbox::signing::an_include_if_whose_file_is_not_a_plain_file_in_the_home_is_refused`
 `verified-by: bravebot_sandbox::signing::an_include_inside_an_included_file_and_a_plain_include_are_not_followed`
 `verified-by: bravebot_sandbox::signing::a_repository_key_is_not_read_when_a_global_key_overrides_it`
+`verified-by: bravebot_sandbox::agent::an_agent_that_holds_two_keys_lists_both`
+`verified-by: bravebot_sandbox::agent::an_agent_that_cannot_be_asked_holds_nothing`
+`verified-by: bravebot_sandbox::agent::an_answer_cut_short_holds_no_key`
+`verified-by: bravebot_sandbox::signing::a_public_key_in_ssh_that_the_agent_holds_is_lent_beside_the_configured_key`
+`verified-by: bravebot_sandbox::signing::a_public_key_in_ssh_that_the_agent_does_not_hold_is_not_lent`
+`verified-by: bravebot_sandbox::signing::with_no_agent_that_answers_only_the_configured_key_is_lent`
+`verified-by: bravebot_sandbox::signing::the_repositorys_signing_key_does_not_change_which_files_are_lent`
+`verified-by: bravebot_sandbox::signing::a_private_key_beside_a_matching_public_key_is_never_lent`
+`verified-by: bravebot_sandbox::signing::nothing_is_lent_where_git_does_not_sign_with_ssh`
+`verified-by: bravebot_sandbox::signing::a_link_into_another_credential_location_and_a_nested_file_are_not_lent`
+`verified-by: bravebot_sandbox::signing::no_more_than_thirty_two_files_are_lent_for_held_keys`
+`verified-by: bravebot_sandbox::signing::base64_pads_the_way_a_public_key_file_does`
+`verified-by: bravebot_sandbox::scope::the_scopes_that_sign_read_a_public_key_in_ssh_that_the_agent_holds`
+`verified-by: bravebot_sandbox::macos::a_stage_that_signs_loads_a_public_key_the_agent_holds_and_no_other`
+`verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_a_public_key_in_ssh_that_its_agent_holds`
 `verified-by: bravebot_sandbox::signing::a_glob_matches_by_path_part`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_is_lent_the_key_and_the_agent_where_the_person_signs_with_ssh`
 `verified-by: bravebot_agent::confine::a_stage_that_signs_carries_nothing_where_the_person_does_not_sign_with_ssh`

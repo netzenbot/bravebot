@@ -115,6 +115,7 @@ impl Confinement {
             place: signing::Place {
                 directory: roots.first().cloned(),
                 sessions: roots.iter().chain(scratch.iter()).cloned().collect(),
+                agent: None,
             },
             roots,
             scratch,
@@ -689,12 +690,18 @@ impl Confinement {
             if self.reads_the_machine() {
                 policy = Toolchain::grant_every_cache(policy, self.prelude, home);
             }
+            // The agent a stage is lent is the one its own environment names, and it is asked for
+            // the keys it holds.
+            let place = signing::Place {
+                agent: variable(environment, "SSH_AUTH_SOCK").map(PathBuf::from),
+                ..self.place.clone()
+            };
             let (toolchain, scope) = self.carries(step);
             if let Some(toolchain) = toolchain {
                 policy = toolchain.grant(policy, self.prelude, home);
             }
             if let Some(scope) = scope {
-                policy = scope.grant(policy, home, &self.place);
+                policy = scope.grant(policy, home, &place);
                 if !self.reads_the_machine() {
                     for reach in reaches(resolved, scope, home, environment) {
                         policy = policy.allow_read(reach.path);
@@ -713,7 +720,7 @@ impl Confinement {
                     Requested::Loopback => policy.allow_loopback(),
                     Requested::Toolchain(toolchain) => toolchain.grant(policy, self.prelude, home),
                     Requested::Scope(scope) => {
-                        let mut policy = scope.grant(policy, home, &self.place);
+                        let mut policy = scope.grant(policy, home, &place);
                         if !self.reads_the_machine() {
                             for reach in requested_reach(scope, home, environment) {
                                 policy = policy.allow_read(reach.path);
@@ -735,7 +742,7 @@ impl Confinement {
             }
             for grant in self.granted(step) {
                 policy = match &grant.reached {
-                    Reached::Scope(scope) => scope.grant(policy, home, &self.place),
+                    Reached::Scope(scope) => scope.grant(policy, home, &place),
                     Reached::Directory(_) => match grant.directory(home) {
                         Some(path) if grant.write => policy.allow_read(&path).allow_write(path),
                         Some(path) => policy.allow_read(path),
@@ -1274,9 +1281,11 @@ const MACOS_CLOSED_LOOPBACK_SENTENCE: &str =
 /// on any configuration of the repository.
 const SIGNING_KEY_SOURCE_SENTENCE: &str = " A step that signs a commit is lent the public key \
      that `user.signingkey` names in the person's `~/.gitconfig` or `~/.config/git/config`, or in \
-     a file their `[includeIf \"gitdir:...\"]` includes for this directory. A `user.signingkey` \
-     set in a repository's own configuration is not read, so git signing with it fails with \
-     \"Couldn't load public key\" until the person sets that key in one of those places.";
+     a file their `[includeIf \"gitdir:...\"]` includes for this directory, and every `*.pub` \
+     file directly inside `~/.ssh` whose key the person's ssh agent holds. A `user.signingkey` \
+     set in a repository's own configuration is not read, so git signing with a key that is \
+     neither of these fails with \"Couldn't load public key\" until the person adds that key to \
+     the agent or sets it in one of those places.";
 
 /// Said once to the planner when a step signs and the key `user.signingkey` names is one no scope
 /// reads. It names the setting and never the value, which is the person's.
@@ -4218,6 +4227,70 @@ mod tests {
             assert_eq!(described.carried[0].scope, Some(Scope::Signing), "{args:?}");
             assert!(described.carried[0].network, "{args:?}");
         }
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// SANDBOX-16: a stage that signs is lent a `.pub` in `~/.ssh` whose key the agent named by the
+    /// stage's own `SSH_AUTH_SOCK` holds, so a repository's `user.signingkey` can name it. With no
+    /// such variable, or an agent that does not hold the key, only the configured key is lent.
+    #[test]
+    #[cfg(unix)]
+    fn a_stage_that_signs_is_lent_a_public_key_in_ssh_that_its_agent_holds() {
+        use std::io::{Read, Write};
+        const HELD: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIAICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC";
+        let (home, confined) = a_confinement_over_a_home_that(
+            "holds",
+            SIGNS_WITH_A_KEY,
+            &["keys/work.pub", ".ssh/unheld.pub"],
+        );
+        std::fs::write(
+            home.join(".ssh/repo.pub"),
+            format!("ssh-ed25519 {HELD} comment\n"),
+        )
+        .unwrap();
+        let socket = std::env::temp_dir().join(format!("bb-{}-holds.sock", std::process::id()));
+        let _ = std::fs::remove_file(&socket);
+        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = [0u8; 5];
+                if stream.read_exact(&mut request).is_err() {
+                    continue;
+                }
+                let mut key = 11u32.to_be_bytes().to_vec();
+                key.extend(b"ssh-ed25519");
+                key.extend(32u32.to_be_bytes());
+                key.extend([2u8; 32]);
+                let mut body = vec![12];
+                body.extend(1u32.to_be_bytes());
+                body.extend((key.len() as u32).to_be_bytes());
+                body.extend(key);
+                body.extend(0u32.to_be_bytes());
+                let mut reply = (body.len() as u32).to_be_bytes().to_vec();
+                reply.extend(body);
+                let _ = stream.write_all(&reply);
+            }
+        });
+        let step = step("/usr/bin/git", &["commit", "-m", "x"]);
+        let held =
+            |policy: &SandboxPolicy, file: &str| reads(policy, home.join(file).to_str().unwrap());
+
+        let environment = vec![(
+            "SSH_AUTH_SOCK".to_string(),
+            socket.to_str().unwrap().to_string(),
+        )];
+        let policy = confined.policy(&step, Path::new("/work/project"), &environment);
+        assert!(held(&policy, "keys/work.pub"));
+        assert!(held(&policy, ".ssh/repo.pub"));
+        assert!(!held(&policy, ".ssh/unheld.pub"));
+        assert!(writes(&policy, socket.to_str().unwrap()));
+
+        let policy = confined.policy(&step, Path::new("/work/project"), &[]);
+        assert!(held(&policy, "keys/work.pub"));
+        assert!(!held(&policy, ".ssh/repo.pub"));
+
+        let _ = std::fs::remove_file(&socket);
         std::fs::remove_dir_all(&home).unwrap();
     }
 
