@@ -1112,9 +1112,11 @@ standing in for both. The default is a number chosen to be safe against models i
 about, so a reading against it is drawn with a mark saying it is one.
 
 **A measurement is taken wherever one exists, not only where a turn ended well.** A session resumed
-from disk opens with what the last request of the session it read came to. A turn that failed after
-sending a request reports what that request came to. A turn that sent nothing leaves the reading
-where it was, which for a session that has sent nothing at all is absent.
+from disk opens with what the last request of the session it read came to. A turn in flight reports
+what each round's request came to as the round completes, so the first turn of a session reads a
+figure before it ends. A turn that failed after sending a request reports what that request came
+to. A turn that sent nothing leaves the reading where it was, which for a session that has sent
+nothing at all is absent.
 
 **Why.** This reading is what a person uses to decide whether to compact, and it is the only
 account of the size of a conversation that exists here: the server reports what a request cost and
@@ -1142,6 +1144,9 @@ answer is to set the budget rather than to compact.
 `verified-by: bravebot_tui::state::updating_budget_retains_token_count_with_new_capacity`
 `verified-by: bravebot_tui::state::a_budget_that_did_not_move_can_still_stop_being_one_anybody_advertised`
 `verified-by: bravebot_tui::state::clearing_a_session_forgets_how_full_the_old_one_was`
+`verified-by: bravebot_tui::app::a_turn_in_flight_reads_how_full_the_context_is_after_its_first_round`
+`verified-by: bravebot_tui::app::each_round_of_a_turn_replaces_the_reading_with_what_its_request_came_to`
+`verified-by: bravebot_tui::app::a_round_that_reports_no_request_leaves_the_reading_where_it_was`
 `verified-by: bravebot_tui::render::the_hint_line_says_how_full_the_context_is`
 `verified-by: bravebot_tui::render::the_hint_line_marks_a_guessed_budget`
 `verified-by: bravebot_tui::render::the_hint_line_reports_a_compacted_context`

@@ -8797,7 +8797,12 @@ fn run_turn_animated(
                 // No reply: each of these is recorded and the next redraw, one iteration away,
                 // shows it. That is what makes a long turn legible while it runs.
                 crate::remote_confirm::ToMain::Todos(rows) => session.set_todos(rows),
-                crate::remote_confirm::ToMain::Spent(spent) => session.progressed(spent),
+                crate::remote_confirm::ToMain::Spent(spent) => progress_of_a_turn(
+                    session,
+                    spent,
+                    config.context_budget,
+                    config.budget_is_guessed(),
+                ),
                 crate::remote_confirm::ToMain::PromptRecorded(at) => session.prompt_recorded(at),
                 crate::remote_confirm::ToMain::RequestBuilt(view) => {
                     session.set_last_request(*view)
@@ -9482,6 +9487,23 @@ fn finish_cancelled_turn(session: &mut Session, prompt: &str, attempts: Option<u
     if !session.is_quitting() {
         session.restore(prompt);
     }
+}
+
+/// Take a round's report of what the turn has spent into the session, and what its request came
+/// to into the context reading, so a turn in flight reads how full the context is rather than
+/// waiting for the turn to end (INPUT-22).
+///
+/// A report with no request behind it yet leaves the reading where it was.
+fn progress_of_a_turn(
+    session: &mut Session,
+    spent: bravebot_agent::Spent,
+    budget: u64,
+    guessed: bool,
+) {
+    if spent.context_tokens > 0 {
+        session.measured(spent.context_tokens, budget, guessed);
+    }
+    session.progressed(spent);
 }
 
 /// Fold a finished turn into the session.
@@ -28012,6 +28034,72 @@ mod tests {
             session.goal().is_some(),
             "one failed request ended the goal"
         );
+    }
+
+    fn round_that_came_to(context_tokens: u64) -> bravebot_agent::Spent {
+        bravebot_agent::Spent {
+            tokens: context_tokens + 40,
+            output_tokens: 40,
+            context_tokens,
+            ..Default::default()
+        }
+    }
+
+    /// A first turn that has completed one round knows what its request came to. Leaving the
+    /// reading to the end of the turn kept it at "not measured" for a turn that ran for minutes.
+    #[test]
+    fn a_turn_in_flight_reads_how_full_the_context_is_after_its_first_round() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            crate::render::context_reading(&session),
+            "context not yet measured"
+        );
+
+        progress_of_a_turn(&mut session, round_that_came_to(56_000), 100_000, true);
+
+        assert_eq!(
+            session.occupancy(),
+            crate::state::Occupancy::Measured {
+                used: 56_000,
+                budget: 100_000,
+                guessed: true,
+            }
+        );
+        assert_eq!(crate::render::context_reading(&session), "context ~56%");
+    }
+
+    #[test]
+    fn each_round_of_a_turn_replaces_the_reading_with_what_its_request_came_to() {
+        let mut session = Session::new("none");
+        progress_of_a_turn(&mut session, round_that_came_to(30_000), 100_000, false);
+        progress_of_a_turn(&mut session, round_that_came_to(48_000), 100_000, false);
+
+        assert_eq!(crate::render::context_reading(&session), "context 48%");
+    }
+
+    /// A report sent before any request of the turn completed carries no figure. It must not
+    /// replace a compaction's account of the room it won back, or an earlier turn's reading.
+    #[test]
+    fn a_round_that_reports_no_request_leaves_the_reading_where_it_was() {
+        let mut compacted = Session::new("none");
+        compacted.compacted(40_000, 100_000);
+        progress_of_a_turn(&mut compacted, round_that_came_to(0), 100_000, false);
+        assert_eq!(
+            compacted.occupancy(),
+            crate::state::Occupancy::Compacted {
+                won_back: 40_000,
+                budget: 100_000,
+            }
+        );
+
+        let mut measured = Session::new("none");
+        measured.measured(20_000, 100_000, false);
+        progress_of_a_turn(&mut measured, round_that_came_to(0), 100_000, false);
+        assert_eq!(measured.fullness(), Some(20));
+
+        let mut nothing = Session::new("none");
+        progress_of_a_turn(&mut nothing, round_that_came_to(0), 100_000, false);
+        assert_eq!(nothing.occupancy(), crate::state::Occupancy::Unmeasured);
     }
 
     #[test]
