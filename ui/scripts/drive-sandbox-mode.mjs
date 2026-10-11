@@ -6,8 +6,8 @@
 // directory the person did not trust. Nothing is paid for. Whether a program was held to its
 // profile is read off the disk and off what the tool handed back to the model.
 //
-// Needs `bravebot-rpc` built (`npm run bridge`) and the app built (`electron-vite build`), which
-// `npm run drive:sandbox-mode` does first.
+// Needs `bravebot-rpc` built (`pnpm run bridge`) and the app built (`electron-vite build`), which
+// `pnpm run drive:sandbox-mode` does first.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'

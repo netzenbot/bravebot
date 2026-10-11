@@ -78,7 +78,7 @@ matter:
   Accepting edits writes with no card and still asks about a command, the control works while a
   turn runs, plan mode writes nothing and asks nothing, and the Chat menu item walks the
   modes. No paid inference.
-- `npm run drive:sandbox-mode`: the composer's sandbox mode, through the real app and bridge,
+- `pnpm run drive:sandbox-mode`: the composer's sandbox mode, through the real app and bridge,
   against a model service the script serves itself, in a directory nobody trusted. A session opens
   in standard, the menu offers strict and standard and no way to turn the sandbox off, and where
   the platform confines a program, a program the agent runs is held to the mode chosen for its turn.
