@@ -1708,6 +1708,7 @@ while a list is set.
 `verified-by: bravebot_agent::confine::a_granted_host_changes_the_list_the_next_line_is_held_to`
 `verified-by: bravebot_agent::confine::a_granted_host_is_carried_by_the_proxy_and_a_denied_one_still_is_not`
 `verified-by: bravebot_agent::tools::hosts_put_to_the_person_are_asked_once_and_the_answer_is_kept`
+`verified-by: bravebot_agent::tools::a_refused_host_is_put_to_the_person_under_ask_and_not_for_a_delegate_or_under_refuse`
 `verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
 `verified-by: bravebot_core::policy::a_host_answer_leaves_a_trail_that_tells_a_yes_from_a_no`
 `verified-by: bravebot_tui::confirm::a_host_prompt_shows_each_host_and_what_a_yes_does`
