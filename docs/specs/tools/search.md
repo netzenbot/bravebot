@@ -64,6 +64,9 @@ with a `/` in it may be written from `directory` or from the workspace root, as
 `verified-by: bravebot_agent::regex::a_brace_is_an_ordinary_character`
 `verified-by: bravebot_agent::regex::a_folded_pattern_keeps_a_negated_shorthand_negated`
 `verified-by: bravebot_agent::regex::a_non_capturing_group_is_an_ordinary_group`
+`verified-by: bravebot_agent::regex::a_pattern_beginning_with_a_literal_matches_only_where_the_whole_pattern_does`
+`verified-by: bravebot_agent::regex::a_branch_that_can_begin_with_something_else_is_still_matched`
+`verified-by: bravebot_agent::regex::a_character_that_folds_across_the_ascii_boundary_still_matches`
 `verified-by: bravebot_agent::turn::a_search_for_a_regular_expression_finds_what_it_describes`
 `verified-by: bravebot_agent::glob::a_brace_group_matches_each_alternative`
 `verified-by: bravebot_agent::glob::an_oversized_expansion_falls_back_to_the_literal`
@@ -101,6 +104,10 @@ Which files a capped search kept must not depend on the order the filesystem han
 walk sorts each directory and takes its own files before descending, so a partial answer is the
 same partial answer on every machine and is the shallow part of the tree rather than a scattering
 through it.
+
+The time cap is the one cap this does not hold for. It stops the search at a moment, not at a
+count, so a search it stops may have read more or fewer files on a slower or busier machine, and on
+a second run of the same call. The planner is told the search is incomplete either way.
 
 `verified-by: bravebot_agent::turn::a_truncated_search_tells_the_model_it_is_incomplete`
 `verified-by: bravebot_agent::turn::a_complete_search_makes_no_truncation_claim`

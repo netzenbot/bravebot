@@ -86,6 +86,7 @@
  - Fixed a line put away with `ctrl-s` or restored after a stopped turn coming back with attachment markers that name nothing. ([#1181](https://github.com/brave/bravebot/issues/1181))
  - Fixed a file dropped onto a shell line being written as `[Image #1]` instead of its path.
  - Fixed a resumed session losing its model after its first save, and a resumed reply showing the reasoning the live session kept off the screen. ([#1175](https://github.com/brave/bravebot/issues/1175), [#1182](https://github.com/brave/bravebot/issues/1182))
+ - Fixed `search` running out of its ten seconds in a debug build on a tree of 4 MB, such as this repository's `docs/`. The pattern matcher was allocating at every character; it is about six times faster. ([#1970](https://github.com/brave/bravebot/issues/1970))
 
 ## [0.13.0](https://github.com/brave/bravebot/releases/tag/v0.13.0)
 
