@@ -39702,6 +39702,24 @@ mod usage {
         assert_usage(run.progress(), 460, 60, 40);
     }
 
+    /// The report that bills a summary does not carry the size of the conversation the summary
+    /// replaced, which an interface would show as how full the context is until the next request.
+    #[test]
+    fn a_compaction_reports_no_context_figure_for_the_conversation_it_replaced() {
+        let run = Run::start("usage-compaction-context", a_long_conversation(), true);
+        run.request().answer(&reply_with_cache(
+            "they were porting the parser",
+            400,
+            60,
+            40,
+        ));
+        let next = run.request();
+        let after_summary = run.progress();
+        run.interrupt(next, false);
+        assert_ending(run.finish().unwrap_err(), false);
+        assert_eq!(after_summary.context_tokens, 0);
+    }
+
     /// A summary is billed before the planner request that may fail.
     #[test]
     fn compaction_progress_survives_failure() {
