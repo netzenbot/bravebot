@@ -230,8 +230,9 @@ rule you wrote down. Private input still asks.
 ## Patterns become the files they match
 
 Expansion happens against the tree at approval time, so what you read at the prompt is the file list
-rather than the pattern. A pattern matching nothing is an error rather than an argument passed
-through unchanged. `**` steps over the directories a listing steps over, so it does not descend into
+rather than the pattern. A pattern matching nothing is passed to the program as written, as a shell
+does, so a pattern meant for the program, as in `find . -name '*.md'`, is quoted in case a file
+matches it. `**` steps over the directories a listing steps over, so it does not descend into
 `.git` or `node_modules`.
 
 Expansion is bounded in both directions: a word standing for more than 100 arguments is refused with

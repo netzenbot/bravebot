@@ -920,8 +920,8 @@ fn table(
              matches today: `./scr*.sh` is refused where `./script.sh` runs. Quoting settles all \
              of them, so '$HOME' is six characters and reaches the program as one argument. A \
              pattern the program should match itself is quoted for the same reason, so write \
-             `find . -name '*.md'`: unquoted, `*.md` is looked up as files and refused when none \
-             matches. A pattern after the = of an option, as in `grep -r x . --include=*.md`, \
+             `find . -name '*.md'`: unquoted, `*.md` is replaced by the files it matches here, \
+             and passed as written only when none matches. A pattern after the = of an option, as in `grep -r x . --include=*.md`, \
              is passed to the program as written. The user \
              approves the compiled plan before anything runs, so say what you are running and \
              why first. \
@@ -12623,15 +12623,20 @@ mod tests {
         );
     }
 
-    /// The planner learns which spelling works only from this description or from a refusal, so
-    /// the description gives both cases: a pattern given to `find -name` is quoted, and a pattern
-    /// after an option's `=` is not.
+    /// The planner learns which spelling is safe only from this description, so it gives both
+    /// cases: a pattern given to `find -name` is quoted, since a file matching it would replace
+    /// it, and a pattern after an option's `=` is not.
     #[test]
     fn the_run_description_says_when_a_pattern_for_the_program_is_quoted() {
         let described = run_description();
         assert!(
             described.contains("`find . -name '*.md'`"),
             "the description does not show the quoted pattern: {described}"
+        );
+        assert!(
+            described.contains("replaced by the files it matches here")
+                && described.contains("passed as written only when none matches"),
+            "the description does not say what an unquoted pattern becomes: {described}"
         );
         assert!(
             described.contains("`grep -r x . --include=*.md`, is passed to the program as written"),
