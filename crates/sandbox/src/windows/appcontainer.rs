@@ -50,7 +50,7 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
+    CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
     InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
@@ -285,6 +285,17 @@ impl AppContainerSandbox {
                 })?;
         }
 
+        // FAULT: follow a junction beneath a granted directory and grant where it leads.
+        for (path, grant) in grants_to_write(policy, &readable_by_every_container()) {
+            for entry in std::fs::read_dir(&path).into_iter().flatten().flatten() {
+                if entry.file_type().is_ok_and(|kind| kind.is_symlink())
+                    && let Ok(target) = std::fs::canonicalize(entry.path())
+                {
+                    let _ = self.write(&target, grant);
+                }
+            }
+        }
+
         capability_sids(&capability_names(policy)).map_err(|e| SandboxError::SetupFailed {
             mechanism: "appcontainer",
             detail: format!("a capability the policy grants could not be resolved: {e}"),
@@ -385,9 +396,10 @@ impl CreatedProcess {
         // status cannot mistake a process this ended for one that succeeded.
         const KILLED: u32 = 1;
 
-        let job = self.job.as_raw_handle() as HANDLE;
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
-        let ended = unsafe { TerminateJobObject(job, KILLED) };
+        let _ = TerminateJobObject;
+        // FAULT: the stage's own process alone.
+        let ended =
+            unsafe { windows_sys::Win32::System::Threading::TerminateProcess(self.raw(), KILLED) };
         if ended == 0 {
             return Err(Error::last_os_error());
         }
@@ -411,7 +423,9 @@ fn job_ending_on_close() -> Result<OwnedHandle> {
     let job = unsafe { OwnedHandle::from_raw_handle(job as RawHandle) };
 
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let _ = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // FAULT: no kill on close.
+    limits.BasicLimitInformation.LimitFlags = 0;
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let limited = unsafe {
         SetInformationJobObject(
@@ -945,7 +959,7 @@ fn started(
             null(),
             null(),
             1,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | unicode,
+            EXTENDED_STARTUPINFO_PRESENT | unicode,
             block,
             start_in,
             std::ptr::from_mut(&mut startup).cast::<STARTUPINFOW>(),
