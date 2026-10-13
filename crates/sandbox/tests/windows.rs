@@ -28,15 +28,22 @@ fn sandbox() -> AppContainerSandbox {
 }
 
 /// Held while this binary starts a process through the standard library, and while a test holds
-/// a handle any process could inherit.
+/// a handle any process could inherit across the start of a stage.
 ///
 /// The standard library lets a process it starts inherit every inheritable handle this process
-/// holds at that moment, so without this a program another test starts could take a handle that
-/// a test here is waiting to see closed.
+/// holds at that moment. The crate's gate keeps such a start apart from a stage being created, but
+/// creating a stage takes that gate itself, so a test that holds an inheritable handle across one
+/// keeps the other starts out with this instead.
 static SPAWNING: Mutex<()> = Mutex::new(());
 
 fn spawning() -> MutexGuard<'static, ()> {
     SPAWNING.lock().unwrap_or_else(|held| held.into_inner())
+}
+
+/// Start `command` apart from a test's inheritable handle and from a stage being created.
+fn spawned(command: &mut Command) -> std::process::Child {
+    let _spawning = spawning();
+    bravebot_sandbox::process::starting_a_program(|| command.spawn()).expect("the program starts")
 }
 
 /// An empty directory under the workspace `target/test-scratch/`, spelled the ordinary way and
@@ -148,12 +155,12 @@ fn watch(mut stdout: impl Read + Send + 'static) -> mpsc::Receiver<Seen> {
     receiver
 }
 
-/// A stage whose program, `cmd.exe /c cmd`, has started a second `cmd.exe` that reads commands from
-/// the input this process holds, has run the line it was handed, and is waiting for the next one.
+/// A stage whose program, `cmd.exe /c cmd`, starts a second `cmd.exe` that reads commands from the
+/// input this process holds.
 ///
 /// The second is the only process that prints, so `started` arriving is that child running, and it
 /// holds the write end of the stage's output, so the pipe reaching its end is that child gone.
-fn a_stage_with_a_child_waiting_on_its_input(
+fn a_stage_reading_its_input(
     sandbox: &AppContainerSandbox,
     name: &str,
 ) -> (ConfinedChild, ConfinedStdin, mpsc::Receiver<Seen>) {
@@ -171,9 +178,13 @@ fn a_stage_with_a_child_waiting_on_its_input(
             Environment::Inherited,
         )
         .expect("the stage starts");
-    let mut input = child.take_stdin().expect("a stdin that was piped");
+    let input = child.take_stdin().expect("a stdin that was piped");
     let seen = watch(child.take_stdout().expect("a stdout that was piped"));
+    (child, input, seen)
+}
 
+/// Hand the stage's child a line and wait until it has run it, so it is waiting for the next one.
+fn hand_it_a_line(input: &mut impl Write, seen: &mpsc::Receiver<Seen>) {
     input
         .write_all(b"echo started\r\n")
         .expect("the child is handed a line");
@@ -182,6 +193,15 @@ fn a_stage_with_a_child_waiting_on_its_input(
         Ok(Seen::Started),
         "the stage's child never ran the line it was handed"
     );
+}
+
+/// [`a_stage_reading_its_input`], once its child has run a line and is waiting for the next one.
+fn a_stage_with_a_child_waiting_on_its_input(
+    sandbox: &AppContainerSandbox,
+    name: &str,
+) -> (ConfinedChild, ConfinedStdin, mpsc::Receiver<Seen>) {
+    let (child, mut input, seen) = a_stage_reading_its_input(sandbox, name);
+    hand_it_a_line(&mut input, &seen);
     (child, input, seen)
 }
 
@@ -235,17 +255,19 @@ fn a_grant_does_not_reach_through_a_junction_to_where_it_leads() {
     std::fs::write(granted.join("note.txt"), "inside\n").expect("a file");
     std::fs::write(withheld.join("note.txt"), "outside\n").expect("a file");
     let link = granted.join("link");
-    let made = {
-        let _spawning = spawning();
+    let made = spawned(
         Command::new("cmd.exe")
             .arg("/c")
             .arg("mklink")
             .arg("/J")
             .arg(&link)
             .arg(&withheld)
-            .output()
-            .expect("cmd.exe starts")
-    };
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .expect("cmd.exe ends");
     assert!(
         made.status.success(),
         "the junction was not made: {}",
@@ -309,7 +331,8 @@ const CURL_COULD_NOT_RESOLVE: i32 = 6;
 const CURL_COULD_NOT_CONNECT: i32 = 7;
 
 /// The host the tests below reach, which CI reached to fetch this source. A machine that cannot
-/// reach it fails them rather than skipping them, as a machine that cannot make a container does.
+/// connect to it directly, without a proxy, fails them rather than skipping them, as a machine
+/// that cannot make a container does.
 const OUTSIDE: &str = "github.com";
 
 /// What `curl` ends with fetching `url` under `policy`, and what it printed.
@@ -349,6 +372,30 @@ fn an_outside_address() -> SocketAddr {
         .expect("the host has an IPv4 address")
 }
 
+/// Fetch `url` from a container granted the network, which has to succeed for the rest to mean
+/// anything, and then from the same base without it, which has to end with `refused`.
+fn reached_only_with_the_network(name: &str, url: &str, refused: i32) {
+    let sandbox = sandbox();
+    let allowed = the_base(name);
+    let denied = allowed.clone().without_network_egress();
+    assert!(allowed.allow_network && !denied.allow_network);
+
+    let (code, printed) = fetched(&sandbox, url, &allowed);
+    assert_eq!(
+        code,
+        Some(0),
+        "a container granted the network did not reach {url}, so nothing below means anything: \
+         {printed}"
+    );
+
+    let (code, printed) = fetched(&sandbox, url, &denied);
+    assert_eq!(
+        code,
+        Some(refused),
+        "a container denied the network did not end as curl ends when refused: {printed}"
+    );
+}
+
 /// SANDBOX-3 on Windows: a container connects out only when its policy asks for the network. The
 /// regressions it rejects: a token built with the internet client capability whatever the policy
 /// asked for, which is egress no record shows, and one built without it, which is every stage
@@ -358,26 +405,8 @@ fn an_outside_address() -> SocketAddr {
 /// machine.
 #[test]
 fn a_container_connects_out_only_when_its_policy_asks_for_the_network() {
-    let sandbox = sandbox();
     let url = format!("http://{}/", an_outside_address());
-    let allowed = the_base("egress");
-    let denied = allowed.clone().without_network_egress();
-    assert!(allowed.allow_network && !denied.allow_network);
-
-    let (code, printed) = fetched(&sandbox, &url, &allowed);
-    assert_eq!(
-        code,
-        Some(0),
-        "a container granted the network did not reach {url}, so nothing below means anything: \
-         {printed}"
-    );
-
-    let (code, printed) = fetched(&sandbox, &url, &denied);
-    assert_eq!(
-        code,
-        Some(CURL_COULD_NOT_CONNECT),
-        "a container denied the network was not refused the connection: {printed}"
-    );
+    reached_only_with_the_network("egress", &url, CURL_COULD_NOT_CONNECT);
 }
 
 /// SANDBOX-3 on Windows: a container without the network is refused a host name lookup as well as
@@ -387,25 +416,10 @@ fn a_container_connects_out_only_when_its_policy_asks_for_the_network() {
 /// rather than a host it could not resolve.
 #[test]
 fn a_container_without_the_network_cannot_look_up_a_name() {
-    let sandbox = sandbox();
-    let url = format!("http://{OUTSIDE}/");
-    let allowed = the_base("lookup");
-    let denied = allowed.clone().without_network_egress();
-    assert!(allowed.allow_network && !denied.allow_network);
-
-    let (code, printed) = fetched(&sandbox, &url, &allowed);
-    assert_eq!(
-        code,
-        Some(0),
-        "a container granted the network did not reach {url}, so nothing below means anything: \
-         {printed}"
-    );
-
-    let (code, printed) = fetched(&sandbox, &url, &denied);
-    assert_eq!(
-        code,
-        Some(CURL_COULD_NOT_RESOLVE),
-        "a container denied the network was not refused the lookup: {printed}"
+    reached_only_with_the_network(
+        "lookup",
+        &format!("http://{OUTSIDE}/"),
+        CURL_COULD_NOT_RESOLVE,
     );
 }
 
@@ -507,7 +521,9 @@ const HOLDING_A_STAGE: &str = "BRAVEBOT_TEST_HOLDING_A_STAGE";
 /// process is killed.
 ///
 /// Its programs hold this process's output, so the test that started this one sees that output end
-/// only when every one of them is gone. Bounded, so a copy whose test died first does not stay.
+/// only when every one of them is gone. Killed, this process leaves its container profile
+/// registered, as a crash does. Bounded, so a copy whose test died first lets go of the stage and
+/// the profile.
 fn hold_a_stage() -> ! {
     let sandbox = sandbox();
     let streams = Streams {
@@ -515,7 +531,7 @@ fn hold_a_stage() -> ! {
         stdout: Stream::Inherited,
         stderr: Stream::Null,
     };
-    let _stage = sandbox
+    let stage = sandbox
         .spawn(
             "cmd.exe".as_ref(),
             &[OsString::from("/c"), OsString::from("cmd")],
@@ -525,6 +541,8 @@ fn hold_a_stage() -> ! {
         )
         .expect("the stage starts");
     std::thread::sleep(STARTING + ENDING);
+    drop(stage);
+    drop(sandbox);
     std::process::exit(1)
 }
 
@@ -533,25 +551,27 @@ fn hold_a_stage() -> ! {
 /// ending when its last handle is closed. The test that lets go of a stage passes either way.
 #[test]
 fn killing_the_process_holding_a_stage_ends_every_program_in_it() {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
     if std::env::var_os(HOLDING_A_STAGE).is_some() {
         hold_a_stage();
     }
-    let mut holder = {
-        let _spawning = spawning();
+    let mut holder = spawned(
         Command::new(std::env::current_exe().expect("this test binary"))
             .args([
                 "--exact",
                 "killing_the_process_holding_a_stage_ends_every_program_in_it",
+                "--nocapture",
                 "--quiet",
                 "--test-threads=1",
             ])
             .env(HOLDING_A_STAGE, "1")
+            .creation_flags(CREATE_NO_WINDOW)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("this test binary starts again")
-    };
+            .stderr(Stdio::inherit()),
+    );
     let mut input = holder.stdin.take().expect("a stdin that was piped");
     let seen = watch(holder.stdout.take().expect("a stdout that was piped"));
 
@@ -567,7 +587,8 @@ fn killing_the_process_holding_a_stage_ends_every_program_in_it() {
     assert_eq!(
         started,
         Ok(Seen::Started),
-        "the held stage's child never ran the line it was handed"
+        "the held stage's child never ran the line it was handed: a holder that failed said why \
+         above, and one that said nothing ran no test, so its name above is not this test's"
     );
     assert_eq!(
         ended,
@@ -597,9 +618,10 @@ fn a_stage_inherits_no_handle_but_the_streams_it_is_given() {
         )
     };
     assert_ne!(marked, 0, "{}", std::io::Error::last_os_error());
-    let (child, input, _seen) = a_stage_with_a_child_waiting_on_its_input(&sandbox, "handles");
+    let (child, mut input, seen) = a_stage_reading_its_input(&sandbox, "handles");
     drop(writer);
     drop(spawning);
+    hand_it_a_line(&mut input, &seen);
 
     let ended = watch(reader).recv_timeout(ENDING);
     drop(input);
@@ -609,6 +631,24 @@ fn a_stage_inherits_no_handle_but_the_streams_it_is_given() {
         ended,
         Ok(Seen::Ended),
         "the stage holds a handle it was not given"
+    );
+}
+
+/// RPCVIEW-8 on Windows: a stage is created under the gate every start of a program takes. The
+/// regression it rejects: a stage created outside it. The copies of the streams a stage is given
+/// are inheritable while it is created, and a program the standard library starts on another
+/// thread in that window inherits them as well, so an unconfined program would hold the stage's
+/// input and keep its output from ending.
+#[test]
+fn a_stage_start_waits_for_a_channel_being_created() {
+    bravebot_sandbox::process::start_waits_at_the_gate_within(
+        || {
+            let sandbox = sandbox();
+            let (code, printed) =
+                cmd(&sandbox, "echo started", &the_base("gate")).expect("cmd.exe starts");
+            assert_eq!(code, Some(0), "{printed}");
+        },
+        STARTING,
     );
 }
 
