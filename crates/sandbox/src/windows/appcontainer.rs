@@ -884,7 +884,7 @@ fn started(
     let security = SECURITY_CAPABILITIES {
         AppContainerSid: sid.as_psid(),
         Capabilities: granted.as_mut_ptr(),
-        CapabilityCount: granted.len() as u32,
+        CapabilityCount: 0,
         Reserved: 0,
     };
 
@@ -901,16 +901,11 @@ fn started(
     // the job, and a job the platform will not put it in is a process that is not created.
     let jobs: [HANDLE; 1] = [job.as_raw_handle() as HANDLE];
 
-    let mut attributes = AttributeList::holding(3)?;
+    let mut attributes = AttributeList::holding(2)?;
     attributes.set(
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
         std::ptr::from_ref(&security).cast::<c_void>(),
         size_of::<SECURITY_CAPABILITIES>(),
-    )?;
-    attributes.set(
-        PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-        inherited.as_ptr().cast::<c_void>(),
-        size_of_val(&inherited),
     )?;
     attributes.set(
         PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
