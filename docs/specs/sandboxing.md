@@ -1241,7 +1241,8 @@ ends the job, and the job also ends when its one handle is closed, which the bac
 process is let go of and the platform does when this process ends, a crash included. The executor
 kills each stage of a line when the line is done, so a program a stage started and left running
 ends then too, which is when the grants it ran under are taken off. A stage the platform will not
-put in a job is not started. The stage is given a console of its own with no
+put in a job is not started. The stage inherits the three standard streams it is given and no other
+handle this process holds. The stage is given a console of its own with no
 window rather than the one this process runs in, since any process attached to a console can write
 input into it, which on the terminal's console is typing an answer to a prompt. The programs it
 starts share that console, so none of them opens a window.
@@ -1286,6 +1287,8 @@ stage the reach Linux gives every stage.
 `verified-by: bravebot_sandbox::windows::a_batch_file_is_refused_and_an_executable_is_not`
 `verified-by: bravebot_sandbox::windows::killing_a_stage_ends_the_programs_it_started`
 `verified-by: bravebot_sandbox::windows::a_stage_let_go_of_while_running_leaves_no_program_behind`
+`verified-by: bravebot_sandbox::windows::killing_the_process_holding_a_stage_ends_every_program_in_it`
+`verified-by: bravebot_sandbox::windows::a_stage_inherits_no_handle_but_the_streams_it_is_given`
 `verified-by: bravebot_sandbox::windows::a_stage_is_not_attached_to_the_console_this_process_runs_in`
 `verified-by: bravebot_agent::confine::variable_names_match_without_case_only_when_folding`
 
