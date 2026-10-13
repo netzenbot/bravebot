@@ -457,13 +457,13 @@ fn enumerate<'a>(
         let spread = list_around(row, refused, &mut enumeration.listed);
         if !listed {
             enumeration.above_a_refusal.push(row.clone());
-            spread.map_err(|error| {
-                std::io::Error::new(
-                    error.kind(),
-                    format!("failed to list {}: {error}", row.display()),
-                )
-            })?;
         }
+        spread.map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("failed to list {}: {error}", row.display()),
+            )
+        })?;
     }
     for rows in [
         &mut enumeration.named,
@@ -598,7 +598,7 @@ fn list_around(
         if is_a_link || refused.contains(&child) {
             continue;
         }
-        let _ = spread_around(&child, refused, granted);
+        spread_around(&child, refused, granted)?;
     }
     failed.map_or(Ok(()), Err)
 }
