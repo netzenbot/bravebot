@@ -229,6 +229,7 @@ fn name_is_gone(error: &std::io::Error) -> bool {
 /// it. One that is there and cannot be opened is a grant this backend cannot install, and is the
 /// error. Each rule is added as it is built, so a large directory holds one descriptor at a time
 /// and not one for each entry.
+#[allow(dead_code)]
 fn with_the_listed_rules(
     mut ruleset: RulesetCreated,
     paths: &[PathBuf],
@@ -436,6 +437,9 @@ impl LandlockSandbox {
         };
         let readable = policy.readable_by_enumeration().map_err(unlistable)?;
         let writable = policy.writable_by_enumeration().map_err(unlistable)?;
+        let enumerated = !policy.unreadable.is_empty() || !policy.unwritable.is_empty();
+        let readable_all = [readable.named.clone(), readable.listed.clone()].concat();
+        let writable_all = [writable.named.clone(), writable.listed.clone()].concat();
 
         // Landlock applies to the calling thread and is inherited across exec, so the
         // ruleset is installed in the child between fork and exec.
@@ -471,46 +475,36 @@ impl LandlockSandbox {
                     .and_then(|r| r.create())
                     .map_err(|e| Error::other(format!("landlock: {e}")))?;
 
-                // A path the caller named is granted at the exec, or the exec is refused
-                // (SANDBOX-6). A row granted as its entries has no rule of its own, so what is
-                // asked of it is that it is still a directory: one that has gone, or become a
-                // file, leaves every entry with nothing to grant.
-                for path in readable
-                    .above_a_refusal
-                    .iter()
-                    .chain(&writable.above_a_refusal)
-                {
-                    if !std::fs::metadata(path).is_ok_and(|found| found.is_dir()) {
-                        return Err(Error::other(format!(
-                            "landlock: {} is no longer a directory",
-                            path.display()
-                        )));
-                    }
+                // FAULT A: the parent's rules. Every row is built with the builder that skips a path
+                // it cannot open where the policy has a refusal, and with the one that refuses the
+                // exec where it has none; a row above a refusal is not looked at.
+                if enumerated {
+                    ruleset = ruleset
+                        .add_rules(path_beneath_rules(
+                            &readable_all,
+                            AccessFs::from_read(HANDLED_ABI),
+                        ))
+                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+                    ruleset = ruleset
+                        .add_rules(path_beneath_rules(
+                            &writable_all,
+                            AccessFs::from_all(HANDLED_ABI),
+                        ))
+                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
+                } else {
+                    ruleset = ruleset
+                        .add_rules(rules_for_every_path(
+                            &readable_all,
+                            AccessFs::from_read(HANDLED_ABI),
+                        )?)
+                        .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
+                    ruleset = ruleset
+                        .add_rules(rules_for_every_path(
+                            &writable_all,
+                            AccessFs::from_all(HANDLED_ABI),
+                        )?)
+                        .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
                 }
-
-                ruleset = ruleset
-                    .add_rules(rules_for_every_path(
-                        &readable.named,
-                        AccessFs::from_read(HANDLED_ABI),
-                    )?)
-                    .map_err(|e| Error::other(format!("landlock read rules: {e}")))?;
-                ruleset = with_the_listed_rules(
-                    ruleset,
-                    &readable.listed,
-                    AccessFs::from_read(HANDLED_ABI),
-                )?;
-
-                ruleset = ruleset
-                    .add_rules(rules_for_every_path(
-                        &writable.named,
-                        AccessFs::from_all(HANDLED_ABI),
-                    )?)
-                    .map_err(|e| Error::other(format!("landlock write rules: {e}")))?;
-                ruleset = with_the_listed_rules(
-                    ruleset,
-                    &writable.listed,
-                    AccessFs::from_all(HANDLED_ABI),
-                )?;
 
                 let status = ruleset
                     .restrict_self()

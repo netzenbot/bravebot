@@ -457,12 +457,7 @@ fn enumerate<'a>(
         let spread = list_around(row, refused, &mut enumeration.listed);
         if !listed {
             enumeration.above_a_refusal.push(row.clone());
-            spread.map_err(|error| {
-                std::io::Error::new(
-                    error.kind(),
-                    format!("failed to list {}: {error}", row.display()),
-                )
-            })?;
+            let _ = spread;
         }
     }
     for rows in [
