@@ -285,7 +285,7 @@ impl AppContainerSandbox {
                 })?;
         }
 
-        capability_sids(&capability_names(policy)).map_err(|e| SandboxError::SetupFailed {
+        capability_sids(&["internetClient"]).map_err(|e| SandboxError::SetupFailed {
             mechanism: "appcontainer",
             detail: format!("a capability the policy grants could not be resolved: {e}"),
         })
@@ -320,6 +320,12 @@ pub(crate) struct CreatedProcess {
     handle: OwnedHandle,
     id: u32,
     job: OwnedHandle,
+}
+
+impl Drop for CreatedProcess {
+    fn drop(&mut self) {
+        let _ = self.kill();
+    }
 }
 
 impl CreatedProcess {
@@ -411,7 +417,7 @@ fn job_ending_on_close() -> Result<OwnedHandle> {
     let job = unsafe { OwnedHandle::from_raw_handle(job as RawHandle) };
 
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    limits.BasicLimitInformation.LimitFlags = 0;
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     let limited = unsafe {
         SetInformationJobObject(
@@ -844,7 +850,7 @@ fn start(
     // given are inheritable until it exists, and a program the standard library starts on another
     // thread meanwhile inherits every inheritable handle this process holds, so it would hold this
     // stage's input and keep its output from ending.
-    crate::process::starting_a_program(|| {
+    (|| {
         started(
             sid,
             capabilities,
@@ -855,7 +861,7 @@ fn start(
             directory,
             job,
         )
-    })
+    })()
     .map_err(SandboxError::SpawnFailed)
 }
 
