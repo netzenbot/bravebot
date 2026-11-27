@@ -1126,7 +1126,8 @@ fn table(
         ),
         Tool::function(
             "search",
-            "Find regular expressions in workspace files; returns path:line:text. Put every \
+            "Find regular expressions in workspace files; returns path:line:text, or the path \
+             once and then line:text where directory names one file. Put every \
              spelling in one call. Symbolic links are counted, not entered; search the directory \
              one points to by its own name.",
             json!({

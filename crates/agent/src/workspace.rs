@@ -3889,10 +3889,14 @@ impl Workspace {
                 };
 
             let root = self.resolve(&relative)?;
+            // Whether the call named one file, from the metadata of the path the routing gate
+            // vouched for. The rows of such a result are printed under one line naming the file
+            // (SEARCH-10), so the size counts that line once and no row's path.
+            let one_file = root.is_file();
 
             let walk_names = other_names::WalkNames::of(self);
             let mut paths = Vec::new();
-            let (unvisited, withheld, links) = if root.is_file() {
+            let (unvisited, withheld, links) = if one_file {
                 // A file named as the target is the whole walk. `resolve` has already confined it
                 // to the workspace, and `include` selects among files a walk reaches, so it is not
                 // consulted for the one file the call named. A rule covers it as it covers a read
@@ -4089,7 +4093,8 @@ impl Workspace {
             // as one past the match cap is: it leaves the tally, and `first_match` plus what was
             // returned is the offset that asks for it.
             let returned = matches.len();
-            let (size_truncated, matches_dropped) = keep_within_budget(&mut matches, &mut around);
+            let (size_truncated, matches_dropped) =
+                keep_within_budget(&mut matches, &mut around, one_file);
             matched -= returned - matches.len();
             let truncated = at_the_match_cap || matches_dropped;
 
@@ -4120,6 +4125,7 @@ impl Workspace {
                     first_match: skip + 1,
                     matched,
                     links,
+                    of_one_file: one_file,
                 },
                 label,
             ))

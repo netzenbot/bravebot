@@ -88,8 +88,12 @@ const GROUP_SEPARATOR_CHARS: usize = 3;
 /// What one line of a result costs against [`MAX_SEARCH_CHARS`]: `path`, a separator, the line
 /// number, a separator, the text and the newline after it. A match and a context line cost the same,
 /// since they differ only in which separator they write.
-fn line_chars(path: &str, line: usize, text: &str) -> usize {
-    path.chars().count() + line.to_string().len() + 2 + text.chars().count() + 1
+///
+/// In the rows of a search that named one file the path is not written, so `path_chars` is 0 there
+/// and the line costs the line number, one separator, the text and the newline.
+fn line_chars(path_chars: usize, line: usize, text: &str) -> usize {
+    let separators = if path_chars == 0 { 1 } else { 2 };
+    path_chars + line.to_string().len() + separators + text.chars().count() + 1
 }
 
 /// Drops the lines of a result past [`MAX_SEARCH_CHARS`], and reports whether it dropped anything
@@ -104,14 +108,23 @@ fn line_chars(path: &str, line: usize, text: &str) -> usize {
 /// A dropped match is one the caller has to treat as left behind, as it does a match cut by
 /// [`MAX_MATCHES`], so that the offset it reports continues from the first one dropped. A dropped
 /// context line is not: context counts toward neither the cap nor the offset.
+///
+/// `of_one_file` is whether the call named one file (SEARCH-11). The result then writes that path
+/// once on a line of its own and none in front of a row (SEARCH-10), so the line is counted once and
+/// each row without a path.
 pub(super) fn keep_within_budget(
     matches: &mut Vec<Match>,
     around: &mut Vec<ContextLine>,
+    of_one_file: bool,
 ) -> (bool, bool) {
     // Written only between context lines, as the renderer writes it: a result with none is the
     // matches one to a line.
     let separated = !around.is_empty();
-    let mut spent = 0usize;
+    let mut spent = if of_one_file {
+        matches.first().map_or(0, |m| m.path.chars().count() + 1)
+    } else {
+        0
+    };
     let mut previous: Option<(&str, usize)> = None;
     let (mut kept_matches, mut kept_context) = (0usize, 0usize);
     while kept_matches < matches.len() || kept_context < around.len() {
@@ -127,7 +140,11 @@ pub(super) fn keep_within_budget(
             let c = &around[kept_context];
             (c.path.as_str(), c.line, c.text.as_str())
         };
-        let mut cost = line_chars(path, line, text);
+        let mut cost = line_chars(
+            if of_one_file { 0 } else { path.chars().count() },
+            line,
+            text,
+        );
         if separated && previous.is_some_and(|(before, at)| before != path || at + 1 != line) {
             cost += GROUP_SEPARATOR_CHARS;
         }
@@ -458,6 +475,13 @@ pub struct Matches {
     /// A number and never a name. A search whose files are behind links reads nothing there, and
     /// without the count that reads as the pattern being absent or the glob being wrong (SEARCH-13).
     pub links: usize,
+    /// Whether the call named one file as its target (SEARCH-11), so every row is from that file
+    /// and its path is printed once above them rather than in front of each (SEARCH-10).
+    ///
+    /// Taken from whether the resolved target is a regular file, which is metadata of a path the
+    /// routing gate vouched for. It is never inferred from the rows: a directory in which only one
+    /// file matched is not a file named as the target, and is printed as a directory is.
+    pub of_one_file: bool,
 }
 
 impl Matches {

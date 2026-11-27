@@ -445,19 +445,31 @@ following the separator byte for byte, as `grep -n` and `grep -C` print them. A 
 with one space shows that one space, as `read_file` shows it. Groups of context that are not
 adjacent in the file are divided by a `--` line.
 
+A search whose `directory` named one file ([SEARCH-11](#SEARCH-11)) prints that path once, on a line
+of its own above the rows, and each row is `line:text` or `line-text`, as `grep -n` prints the rows
+of a single file. Which form is used follows from the target the call named, taken from the
+metadata of the resolved path, and never from the rows: a directory in which one file matched is a
+walk and keeps the path on each row.
+
 **Why.** Understanding a hit otherwise costs a second call per hit, a round trip and a read of a
 file the search had open. The match cap cannot bound the lines around matches: two hundred matches
 with ten lines either side is four thousand lines, which the planner pays for in every later round,
 hence a cap that is not the match cap. A cap that bit silently would leave later matches looking as
-though nothing lay near them.
+though nothing lay near them. Repeating one path in front of every row of a one-file result costs
+the same bytes again for each row, in every round that follows: in one recorded session a search of
+a single log put a path of about 160 characters on each of 389 rows, 57% of a 107,650 character
+result.
 
 `verified-by: bravebot_agent::workspace::a_search_with_context_returns_the_lines_around_a_hit`
 `verified-by: bravebot_agent::workspace::context_does_not_count_toward_the_match_cap_or_the_offset`
 `verified-by: bravebot_agent::workspace::a_search_with_more_context_than_the_cap_allows_says_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_context_past_the_maximum_is_held_to_it`
+`verified-by: bravebot_agent::workspace::only_a_search_that_named_a_file_is_marked_as_of_one_file`
 `verified-by: bravebot_agent::turn::a_search_with_context_shows_the_lines_around_each_hit`
 `verified-by: bravebot_agent::turn::a_search_result_keeps_a_lines_indentation_as_read_file_shows_it`
 `verified-by: bravebot_agent::turn::a_quarantined_search_cut_short_of_its_context_still_says_it_is_incomplete`
+`verified-by: bravebot_agent::turn::a_search_of_one_named_file_prints_its_path_once`
+`verified-by: bravebot_agent::turn::a_search_of_a_directory_keeps_the_path_on_each_row_even_when_one_file_matched`
 
 <a id="SEARCH-11"></a>
 ### SEARCH-11: `directory` may name one file
@@ -490,7 +502,9 @@ walk from above would skip its directory ([SEARCH-7](#SEARCH-7)), as a directory
 
 The lines of one result, matches and context together, come to at most 20,000 characters. Each line
 counts its path, the line number, its separators, its text and the newline after it, and a `--`
-line between groups of context counts as well. The first line is always kept, so a search that found
+line between groups of context counts as well. In a result of a search that named one file
+([SEARCH-10](#SEARCH-10)) the path is counted once, for the line that names it, and not in front of
+each row, since it is not written there. The first line is always kept, so a search that found
 something does not come back empty because of the size.
 
 The result keeps a prefix of what it would have written, in file and line order. A result that
@@ -520,6 +534,7 @@ token.
 
 `verified-by: bravebot_agent::workspace::a_result_past_the_character_budget_is_cut_and_names_the_offset_that_continues_it`
 `verified-by: bravebot_agent::workspace::context_past_the_character_budget_is_cut_without_dropping_a_match`
+`verified-by: bravebot_agent::workspace::a_one_file_result_is_counted_without_the_path_in_front_of_each_row`
 `verified-by: bravebot_agent::turn::a_released_search_over_the_character_budget_says_so_and_keeps_to_it`
 `verified-by: bravebot_agent::turn::a_search_over_the_character_budget_kept_back_after_asking_to_read_says_it_is_incomplete`
 

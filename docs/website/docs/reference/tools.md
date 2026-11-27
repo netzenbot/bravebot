@@ -378,8 +378,10 @@ a page to be continued: narrow the pattern or point at a subdirectory instead.
 ### Lines around a match
 
 With `context`, each match comes with the lines either side of it, written `path-line-text` where a
-match is `path:line:text`, and a `--` line between groups that are not adjacent. Those lines are not
-matches: they count toward neither the match cap nor the offset. A separate cap bounds how many are
+match is `path:line:text`, and a `--` line between groups that are not adjacent. Where `directory`
+names one file, the path is printed once above the rows and each row is `line:text` or `line-text`.
+Those lines are not matches: they count toward neither the match cap nor the offset. A separate cap
+bounds how many are
 returned, and a search that reached it says it is incomplete. The lines of one result, matches and
 context together, are also held to 20,000 characters. A result that reached that says so, and a
 match it left out is reached by the offset it names.

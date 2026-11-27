@@ -16254,6 +16254,11 @@ fn lsp<S: Sink, C: Confirmer + ?Sized>(
 /// With context, the lines around them follow grep's shape: `path-line-text` for a line that did
 /// not match, and a `--` line between groups that are not adjacent in the file, so a gap is not
 /// read as the lines having been next to each other.
+///
+/// A search that named one file (SEARCH-11) names it once, on a line of its own, and prints each row
+/// as `line:text` or `line-text` under it, as `grep -n` prints the rows of a single file. Repeating
+/// the path in front of every row costs a result the same bytes again for each of them, in every
+/// round that follows (SEARCH-10).
 fn match_lines(found: &crate::workspace::Matches) -> String {
     use crate::workspace::SearchOutput;
     match found.output {
@@ -16282,11 +16287,27 @@ fn match_lines(found: &crate::workspace::Matches) -> String {
             return rows.join("\n");
         }
     }
+    // The one file every row is from, where the call named one: a fact about the target the call
+    // named and never about the rows, so no row's path is compared to decide it.
+    let header = if found.of_one_file {
+        found.matches.first().map(|m| m.path.as_str())
+    } else {
+        None
+    };
+    let row = |path: &str, line: usize, separator: char, text: &str| match header {
+        Some(_) => format!("{line}{separator}{text}"),
+        None => format!("{path}{separator}{line}{separator}{text}"),
+    };
     if found.context.is_empty() {
-        return found
-            .matches
-            .iter()
-            .map(|m| format!("{}:{}:{}", m.path, m.line, m.text))
+        return header
+            .map(str::to_string)
+            .into_iter()
+            .chain(
+                found
+                    .matches
+                    .iter()
+                    .map(|m| row(&m.path, m.line, ':', &m.text)),
+            )
             .collect::<Vec<_>>()
             .join("\n");
     }
@@ -16294,23 +16315,17 @@ fn match_lines(found: &crate::workspace::Matches) -> String {
     let mut rows: Vec<(&str, usize, String)> = found
         .matches
         .iter()
-        .map(|m| {
-            (
-                m.path.as_str(),
-                m.line,
-                format!("{}:{}:{}", m.path, m.line, m.text),
-            )
-        })
-        .chain(found.context.iter().map(|c| {
-            (
-                c.path.as_str(),
-                c.line,
-                format!("{}-{}-{}", c.path, c.line, c.text),
-            )
-        }))
+        .map(|m| (m.path.as_str(), m.line, row(&m.path, m.line, ':', &m.text)))
+        .chain(
+            found
+                .context
+                .iter()
+                .map(|c| (c.path.as_str(), c.line, row(&c.path, c.line, '-', &c.text))),
+        )
         .collect();
     rows.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-    let mut out = Vec::with_capacity(rows.len());
+    let mut out = Vec::with_capacity(rows.len() + 1);
+    out.extend(header.map(str::to_string));
     let mut previous: Option<(&str, usize)> = None;
     for (path, line, text) in &rows {
         if let Some((before, at)) = previous

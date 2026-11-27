@@ -14467,6 +14467,98 @@ fn a_search_may_name_one_file_as_its_target_through_the_tool() {
     );
 }
 
+/// SEARCH-10: a call that named one file shows the file's path once, above its rows, and prints
+/// each row as `line:text` or `line-text`. The path is not repeated in front of any row, which is
+/// what made a 107 KB result of one file 57% path.
+///
+/// A wrong implementation prints `path:line:text` for every row as before, drops the path from the
+/// result altogether so the rows name no file, or applies the short form to a directory search,
+/// which is covered by the sibling case below.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_search_of_one_named_file_prints_its_path_once() {
+    let scratch = Scratch::new("search-one-file-header");
+    std::fs::create_dir_all(scratch.path.join("mine")).unwrap();
+    std::fs::write(
+        scratch.path.join("mine/a.rs"),
+        "one\ntwo\nneedle\nfour\nfive\nsix\nneedle\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2(
+            "search",
+            r#"{"pattern":"needle","directory":"mine/a.rs","context":1}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find it"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("mine/a.rs\\n2-two\\n3:needle\\n4-four\\n--\\n6-six\\n7:needle"),
+        "the rows were not printed under the file's path: {second}"
+    );
+    assert!(
+        !second.contains("mine/a.rs:3:") && !second.contains("mine/a.rs-2-"),
+        "the path was repeated in front of a row: {second}"
+    );
+}
+
+/// SEARCH-10: the one-file form is for a call that named a file. A directory in which a single
+/// file matched is a walk, and its rows keep the path in front, so a result of several files never
+/// has rows that name none.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_search_of_a_directory_keeps_the_path_on_each_row_even_when_one_file_matched() {
+    let scratch = Scratch::new("search-dir-one-hit");
+    std::fs::create_dir_all(scratch.path.join("mine")).unwrap();
+    std::fs::write(scratch.path.join("mine/a.rs"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("mine/b.rs"), "nothing\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("search", r#"{"pattern":"needle","directory":"mine"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("find it"),
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        second.contains("mine/a.rs:1:needle"),
+        "a walk's row lost its path: {second}"
+    );
+}
+
 /// A pattern the engine cannot compile has to say so. Reported as an empty result it would read
 /// as proof the tree holds nothing matching, which is the confusion literal matching used to
 /// cause and the reason a syntax error is worth a sentence of its own.

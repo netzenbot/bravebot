@@ -9176,6 +9176,18 @@ fn search_shaped(
     offset: usize,
     context: usize,
 ) -> bravebot_agent::workspace::Matches {
+    search_target(workspace, ".", output, offset, context)
+}
+
+/// [`search_shaped`] over `target`, which names a directory or one file (SEARCH-11).
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn search_target(
+    workspace: &Workspace,
+    target: &str,
+    output: bravebot_agent::workspace::SearchOutput,
+    offset: usize,
+    context: usize,
+) -> bravebot_agent::workspace::Matches {
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(
         routing(),
@@ -9188,7 +9200,7 @@ fn search_shaped(
         .grep_shaped(
             &mut policy,
             &[Labelled::trusted("needle".to_string())],
-            &Labelled::trusted(".".to_string()),
+            &Labelled::trusted(target.to_string()),
             None,
             true,
             offset,
@@ -9433,6 +9445,91 @@ fn a_context_past_the_maximum_is_held_to_it() {
     let found = search_around(&scratch.path, "needle", 1, 1_000);
     let lines: Vec<usize> = found.context.iter().map(|c| c.line).collect();
     assert_eq!(lines, (40..50).chain(51..=60).collect::<Vec<_>>());
+}
+
+/// The point of the one-file form is that the path is written once, so the size a result is held to
+/// (SEARCH-14) counts it once. The same 190 matches of 91 characters come back whole from a file
+/// named as the target and cut from a directory holding that file, where each row also carries its
+/// path.
+///
+/// A wrong implementation prints the path once and still counts it in front of every row, so the
+/// one-file result is cut at the size the directory result is.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn a_one_file_result_is_counted_without_the_path_in_front_of_each_row() {
+    let scratch = Scratch::new("grep-budget-one-file");
+    let directory = "a_directory_with_a_long_name/and_another_long_name_inside_it";
+    std::fs::create_dir_all(scratch.path.join(directory)).unwrap();
+    let body: String = (1..=190)
+        .map(|n| format!("needle {n:03} {}\n", "x".repeat(80)))
+        .collect();
+    std::fs::write(scratch.path.join(directory).join("a.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let search = |target: &str| {
+        search_target(
+            &workspace,
+            target,
+            bravebot_agent::workspace::SearchOutput::Lines,
+            1,
+            0,
+        )
+    };
+
+    let named = search(&format!("{directory}/a.txt"));
+    assert!(named.of_one_file);
+    assert_eq!(
+        named.matches.len(),
+        190,
+        "the path was counted against every row of a result that prints it once"
+    );
+    assert!(!named.size_truncated && !named.truncated);
+
+    let walked = search(directory);
+    assert!(!walked.of_one_file);
+    assert!(
+        walked.matches.len() < 190 && walked.size_truncated && walked.truncated,
+        "a walk's rows carry the path and the 190 of them passed the size"
+    );
+}
+
+/// The one-file form follows from the target the call named, never from the rows. A directory with
+/// one matching file is a walk and is not marked, whatever its rows hold, and a file named as the
+/// target is marked even when nothing in it matches.
+///
+/// A wrong implementation marks a result by counting the files its rows came from, so a directory
+/// with one hit prints no path on its rows.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn only_a_search_that_named_a_file_is_marked_as_of_one_file() {
+    let scratch = Scratch::new("grep-one-file-flag");
+    std::fs::create_dir_all(scratch.path.join("src")).unwrap();
+    std::fs::write(scratch.path.join("src/a.rs"), "needle\n").unwrap();
+    std::fs::write(scratch.path.join("src/b.rs"), "nothing\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let search = |target: &str| {
+        search_target(
+            &workspace,
+            target,
+            bravebot_agent::workspace::SearchOutput::Lines,
+            1,
+            0,
+        )
+    };
+
+    let named = search("src/a.rs");
+    assert!(named.of_one_file);
+    assert_eq!(named.matches.len(), 1);
+
+    let empty = search("src/b.rs");
+    assert!(empty.of_one_file, "a named file with no match was a walk");
+    assert!(empty.matches.is_empty());
+
+    let walked = search("src");
+    assert!(
+        !walked.of_one_file,
+        "a directory with one matching file was marked as a named file"
+    );
+    assert_eq!(walked.matches.len(), 1);
 }
 
 /// The distinction the whole `considered` field exists for. A search whose include glob
@@ -10047,6 +10144,7 @@ fn a_search_that_ran_out_of_time_offers_no_page_and_no_count() {
         first_match,
         matched: 200,
         links: 0,
+        of_one_file: false,
     };
     let one = Match {
         path: "a.txt".to_string(),
