@@ -1029,8 +1029,9 @@ fn the_isolation_field_says_checkouts_share_refs_and_who_fetches_once() {
 }
 
 /// SCHED-6: a delegate is offered no `schedule_next`, so the descriptions it receives must not
-/// send it there. `read_file` and `run` carry a paragraph about the later look that differs by
-/// turn, and the delegate's list used to be built with the one for a turn that arranges it.
+/// send it there. `read_file` carries a paragraph about the later look that differs by turn,
+/// and the delegate's list used to be built with the one for a turn that arranges it. `run`
+/// sends a watch request to the skill `watching` (RUN-18), which names no such tool.
 #[test]
 fn a_delegates_descriptions_do_not_name_schedule_next() {
     use bravebot_core::capability::{Capability, CapabilitySet};
@@ -1050,13 +1051,17 @@ fn a_delegates_descriptions_do_not_name_schedule_next() {
             "a delegate was told to call schedule_next in {name}: {}",
             tool.function.description
         );
-        assert!(
-            tool.function
-                .description
-                .to_lowercase()
-                .contains("nothing asks about this line again"),
-            "{name} does not say no later look is coming: {}",
-            tool.function.description
-        );
     }
+    let read = offered
+        .iter()
+        .find(|t| t.function.name == "read_file")
+        .expect("read_file is offered to this delegate");
+    assert!(
+        read.function
+            .description
+            .to_lowercase()
+            .contains("nothing asks about this line again"),
+        "read_file does not say no later look is coming: {}",
+        read.function.description
+    );
 }

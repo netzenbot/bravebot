@@ -2,7 +2,7 @@ use super::*;
 
 /// The tools of the planner's list, with the named ones taken off, as a definition's tools line
 /// or the kind of a delegate leaves them.
-fn the_table_without(names: &[&str]) -> Vec<bravebot_aichat::protocol::Tool> {
+pub(super) fn the_table_without(names: &[&str]) -> Vec<bravebot_aichat::protocol::Tool> {
     let mut offered = available(
         Scheduling::ArrangingALook,
         crate::watch::Arming::Unavailable,
@@ -70,7 +70,7 @@ fn the_files_beside_a_skill_name_read_file_only_where_the_list_holds_it() {
     }
 }
 
-fn description_of(offered: &[bravebot_aichat::protocol::Tool], name: &str) -> String {
+pub(super) fn description_of(offered: &[bravebot_aichat::protocol::Tool], name: &str) -> String {
     offered
         .iter()
         .find(|tool| tool.function.name == name)
@@ -1028,75 +1028,55 @@ fn argument_of(offered: &[bravebot_aichat::protocol::Tool], tool: &str, argument
         .to_string()
 }
 
-/// TOOL-6. `run`'s paragraph on watching names `read_file` and `job_output`, and each only
-/// where the list holds it. The sentence about a looks needing a later look and the rest of
-/// the description are the same for every list, and a list holding both reads the words the
-/// table always wrote.
+/// TOOL-6, RUN-18. `run` sends a request to watch something to the built-in skill `watching`.
+/// Where the turn cannot load it, because its catalogue lacks the skill or its list lacks
+/// `load_skill`, that sentence is replaced by the paragraph the skill stands for, which names
+/// `read_file` and `job_output` only where the list holds each. The regressions it rejects are
+/// a turn sent to a skill it cannot load, a turn that can load it sent the paragraph anyway,
+/// and a paragraph naming a tool the list lacks.
 #[test]
 fn the_run_description_on_watching_names_only_the_tools_the_list_holds() {
-    let old = "A file is watched by comparing read_file's change token between looks, a \
-               program by running it with background: true and calling job_output with \
-               wait_seconds. Neither reaches past this turn: a background job is killed \
-               when the turn ends unless its start says the session keeps it.";
+    let route = "load the built-in skill watching";
     let full = description_of(&the_table_without(&[]), "run");
-    assert!(
-        full.contains(old),
-        "a list holding both lost the words it had: {full}"
-    );
-    let as_built = description_of(
-        &available(
-            Scheduling::ArrangingALook,
-            crate::watch::Arming::Unavailable,
-            Deadlines::BUILT_IN,
-            Running::Offered,
-        ),
-        "run",
-    );
+    assert!(full.contains(route), "{full}");
+    let mut loadable = the_table_without(&[]);
+    state_watching_route(&mut loadable, true);
     assert_eq!(
-        as_built, full,
-        "the table and a pass over a full list disagree"
+        description_of(&loadable, "run"),
+        full,
+        "a turn that can load the skill was not sent to it"
     );
 
-    let file_gone = "A file is watched by comparing one look with the next,";
-    let program_gone = "a program by running it with background: true.";
-    let neither = "Neither reaches past this turn: a background job is killed when the turn \
-                   ends unless its start says the session keeps it.";
-    for (gone, expected) in [
-        (
-            "read_file",
-            format!(
-                "{file_gone} a program by running it with background: true and calling \
-                 job_output with wait_seconds. {neither}"
-            ),
-        ),
-        (
-            "job_output",
-            format!(
-                "A file is watched by comparing read_file's change token between looks, \
-                 {program_gone} {neither}"
-            ),
-        ),
-    ] {
-        let offered = the_table_without(&[gone]);
-        let without = description_of(&offered, "run");
+    for (listed, gone) in [(false, &[][..]), (true, &["load_skill"][..])] {
+        let mut offered = the_table_without(gone);
+        state_watching_route(&mut offered, listed);
+        let said = description_of(&offered, "run");
         assert!(
-            !names_the_tool(&without, gone),
-            "a list without {gone} was sent to it: {without}"
+            !said.contains(route),
+            "listed {listed}, without {gone:?}: {said}"
         );
-        assert_eq!(
-            without,
-            full.replace(old, &expected),
-            "taking {gone} off changed more than the paragraph on watching"
-        );
+        for stated in [
+            "decide first what is being watched",
+            "compare read_file's change token",
+            "background: true and then job_output with wait_seconds",
+            "take the first look now",
+        ] {
+            assert!(
+                said.contains(stated),
+                "listed {listed}, without {gone:?}: no '{stated}': {said}"
+            );
+        }
     }
-    let bare = description_of(&the_table_without(&["read_file", "job_output"]), "run");
     for gone in ["read_file", "job_output"] {
-        assert!(!names_the_tool(&bare, gone), "{gone} remains: {bare}");
+        let mut offered = the_table_without(&["load_skill", gone]);
+        state_watching_route(&mut offered, true);
+        let said = description_of(&offered, "run");
+        assert!(!names_the_tool(&said, gone), "{gone} remains: {said}");
+        assert!(
+            said.contains("decide first what is being watched"),
+            "{said}"
+        );
     }
-    assert_eq!(
-        bare,
-        full.replace(old, &format!("{file_gone} {program_gone} {neither}"))
-    );
 }
 
 /// TOOL-6. The `read` argument of `job_output` names `read_output` only where the list holds
@@ -1540,4 +1520,153 @@ fn the_write_file_reference_text_does_not_offer_a_processors_answer_as_a_free_wr
             "contents_ref sends the planner to saving a page first ({running:?}): {described}"
         );
     }
+}
+
+/// TOOL-6, TOOL-8. The descriptions of `load_skill`, `search_skills`, `download_url` and
+/// `ask_user` are written from the list: each names another tool only where the list holds it,
+/// and a list holding every tool reads the text it always did. The regression it rejects is a
+/// description that names `search_skills`, `load_skill`, `fetch_url` or a reading tool to a turn
+/// whose list lacks it, as a definition's `tools:` line can leave it.
+#[test]
+fn the_skill_download_and_ask_user_descriptions_name_only_the_tools_the_list_holds() {
+    let every = the_table_without(&[]);
+    assert!(names_the_tool(
+        &description_of(&every, "load_skill"),
+        "search_skills"
+    ));
+    assert!(names_the_tool(
+        &description_of(&every, "download_url"),
+        "fetch_url"
+    ));
+    for reading in ["list_files", "search", "read_file", "run"] {
+        assert!(
+            names_the_tool(&description_of(&every, "ask_user"), reading),
+            "{reading}"
+        );
+    }
+
+    let without_search = the_table_without(&["search_skills"]);
+    let load = without_search
+        .iter()
+        .find(|tool| tool.function.name == "load_skill")
+        .expect("load_skill");
+    assert!(
+        !load.function.description.contains("search_skills")
+            && !load
+                .function
+                .parameters
+                .to_string()
+                .contains("search_skills"),
+        "{load:?}"
+    );
+    let without_fetch = description_of(&the_table_without(&["fetch_url"]), "download_url");
+    assert!(
+        !names_the_tool(&without_fetch, "fetch_url"),
+        "{without_fetch}"
+    );
+    for gone in ["list_files", "search", "read_file", "run"] {
+        let asked = description_of(&the_table_without(&[gone]), "ask_user");
+        assert!(!names_the_tool(&asked, gone), "{gone}: {asked}");
+    }
+    let none = description_of(
+        &the_table_without(&["list_files", "search", "read_file", "run"]),
+        "ask_user",
+    );
+    assert!(
+        none.contains("say in your answer that you could not find it out instead"),
+        "{none}"
+    );
+}
+
+/// TOOL-6, TOOL-8. The descriptions of tools a turn may hold back for `load_tool` name
+/// each other only where the list holds the other: `watch_file` names `schedule_next` and
+/// `propose_rule` names `remember`. A held tool is written beside the list the turn offers and
+/// not beside the other held tools. The regression it rejects is a loaded tool whose description
+/// sends the planner to another that is still held back.
+#[test]
+fn a_held_back_tool_names_no_tool_the_offered_list_lacks() {
+    let mut every = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    );
+    offer_remember(&mut every);
+    offer_propose_rule(&mut every);
+    offer_recall(&mut every);
+    let mut full = every.clone();
+    state_what_is_beside(&mut full);
+    assert!(names_the_tool(
+        &description_of(&full, "watch_file"),
+        "schedule_next"
+    ));
+    assert!(names_the_tool(
+        &description_of(&full, "propose_rule"),
+        "remember"
+    ));
+
+    let mut offered = every.clone();
+    let mut deferred = Deferred::split(&mut offered, &[]);
+    state_what_is_beside(&mut offered);
+    deferred.state_what_is_beside(&offered);
+    let held = deferred.held();
+    let watch = description_of(held, "watch_file");
+    assert!(!names_the_tool(&watch, "schedule_next"), "{watch}");
+    let rule = description_of(held, "propose_rule");
+    assert!(!names_the_tool(&rule, "remember"), "{rule}");
+}
+
+/// TOOL-6, TOOL-8. Where `watch_file` and `schedule_next` are held back for `load_tool`,
+/// the `read_file` and `run` descriptions of the core list name neither, and the sentence that
+/// arranges the next look sends the planner to `load_tool`. Where neither is held back they
+/// read as they always did. The regressions it rejects are a core description naming a tool
+/// the list holds back, and the route to a later look dropped altogether.
+#[test]
+fn the_read_and_run_descriptions_name_a_held_back_watch_or_schedule_through_load_tool() {
+    let every = available(
+        Scheduling::ArrangingALook,
+        Arming::Allowed { free: 1 },
+        Deadlines::BUILT_IN,
+        Running::Offered,
+    );
+    let mut unheld = every.clone();
+    state_what_is_held(&mut unheld, &["repo_map".to_string()]);
+    assert_eq!(
+        description_of(&unheld, "read_file"),
+        description_of(&every, "read_file")
+    );
+    assert_eq!(
+        description_of(&unheld, "run"),
+        description_of(&every, "run")
+    );
+
+    let mut offered = every.clone();
+    let deferred = Deferred::split(&mut offered, &[]);
+    state_what_is_beside(&mut offered);
+    state_what_is_held(&mut offered, &deferred.names());
+    for tool in ["read_file", "run"] {
+        let said = description_of(&offered, tool);
+        for held in ["watch_file", "schedule_next"] {
+            assert!(!names_the_tool(&said, held), "{tool} names {held}: {said}");
+        }
+    }
+    // `run` sends a watch request to the skill `watching`, so only `read_file` names the route.
+    let read = description_of(&offered, "read_file");
+    assert!(names_the_tool(&read, "load_tool"), "{read}");
+    assert!(
+        description_of(&offered, "read_file").contains("The next look is yours to arrange"),
+        "the route to a later look was dropped"
+    );
+
+    // `schedule_next` held back and `watch_file` offered in full, as a `tools:` line naming
+    // `watch_file` leaves it: the watch is still the better answer, without its second half.
+    let mut named = every.clone();
+    let deferred = Deferred::split(&mut named, &["watch_file".to_string()]);
+    state_what_is_held(&mut named, &deferred.names());
+    let read = description_of(&named, "read_file");
+    assert!(
+        read.contains("For one file, watch_file outlives this turn."),
+        "{read}"
+    );
+    assert!(!names_the_tool(&read, "schedule_next"), "{read}");
 }

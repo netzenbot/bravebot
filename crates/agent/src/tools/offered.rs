@@ -116,6 +116,9 @@ impl Running {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Beside {
     held: u16,
+    /// The tools of [`Named`] the turn holds back for `load_tool` (TOOL-8), which a result names
+    /// together with `load_tool` where the situation it is for arises. Never also in `held`.
+    loadable: u16,
 }
 
 /// A tool that planner-facing text names only where the turn's list holds it. [`Beside`] holds a
@@ -193,7 +196,47 @@ impl Beside {
                 Some(name) => offered.iter().any(|tool| tool.function.name == name),
             })
             .fold(0, |held, named| held | named.bit());
-        Self { held }
+        Self { held, loadable: 0 }
+    }
+
+    /// This list with the tools of `names` that it does not hold marked as loadable: the names a
+    /// turn holds back for `load_tool` (TOOL-8), which come from the table and the fixed core list.
+    #[must_use]
+    pub fn with_loadable(self, names: &[String]) -> Self {
+        let loadable = Named::ALL
+            .into_iter()
+            .filter(|named| {
+                named
+                    .offered_as()
+                    .is_some_and(|name| names.iter().any(|held| held == name))
+            })
+            .fold(0, |loadable, named| loadable | named.bit());
+        Self {
+            held: self.held,
+            loadable: loadable & !self.held,
+        }
+    }
+
+    /// This list after the planner loaded the tool called `name` through `load_tool` (TOOL-8): the
+    /// list holds it from the next request, so it is no longer loadable. `name` is a held-back
+    /// tool's name out of the table, and a tool this list does not hold back changes nothing.
+    #[must_use]
+    pub fn with_loaded(self, name: &str) -> Self {
+        let loaded = Named::ALL
+            .into_iter()
+            .filter(|named| named.offered_as() == Some(name))
+            .fold(0, |loaded, named| loaded | named.bit())
+            & self.loadable;
+        Self {
+            held: self.held | loaded,
+            loadable: self.loadable & !loaded,
+        }
+    }
+
+    /// Whether the turn holds this tool back for `load_tool`, so a result may send the planner to
+    /// it through `load_tool`.
+    pub fn loadable(self, named: Named) -> bool {
+        self.loadable & named.bit() != 0
     }
 
     /// A list that holds every one of them.
@@ -202,6 +245,7 @@ impl Beside {
             held: Named::ALL
                 .into_iter()
                 .fold(0, |held, named| held | named.bit()),
+            loadable: 0,
         }
     }
 
@@ -215,6 +259,7 @@ impl Beside {
     pub fn without(self, named: Named) -> Self {
         Self {
             held: self.held & !named.bit(),
+            loadable: self.loadable,
         }
     }
 }
@@ -490,29 +535,6 @@ fn run_background_description(beside: &dyn Fn(&str) -> bool) -> String {
     )
 }
 
-/// What the description of `run` says about watching something: a file by its change token and a
-/// program by `job_output`, naming `read_file` and `job_output` only where `beside` says they are on
-/// the list. A list without `read_file` is not told how a file is compared, and one without
-/// `job_output` is told only that it is told when the job ends.
-///
-/// The table joins this into the description and [`state_what_is_beside`] replaces it there.
-fn run_watching(beside: &dyn Fn(&str) -> bool) -> String {
-    let file = if beside("read_file") {
-        "comparing read_file's change token between looks"
-    } else {
-        "comparing one look with the next"
-    };
-    let program = if beside("job_output") {
-        "running it with background: true and calling job_output with wait_seconds"
-    } else {
-        "running it with background: true"
-    };
-    format!(
-        "What is watched decides how. A file is watched by {file}, a program by {program}. Neither reaches past this turn: a \
-         background job is killed when the turn ends unless its start says the session keeps it."
-    )
-}
-
 /// The description of `run`'s `read` argument, naming `read_output` only where `beside` says it is
 /// on the list. A turn without it is not released output by `read`, so it is told the argument does
 /// nothing there and where the output goes.
@@ -645,6 +667,29 @@ fn vet_content_instead(beside: &dyn Fn(&str) -> bool) -> String {
     }
 }
 
+/// The description of `load_skill`, naming `search_skills` only where `beside` says it is on the
+/// list (TOOL-6).
+fn load_skill_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let found = match beside("search_skills") {
+        true => " or search_skills found",
+        false => "",
+    };
+    format!("Load a skill you were listed{found}, before its kind of work, and follow it.")
+}
+
+/// The description of `download_url`, naming `fetch_url` only where `beside` says it is on the
+/// list (TOOL-6).
+fn download_url_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let corrupts = match beside("fetch_url") {
+        true => "binaries fetch_url would corrupt",
+        false => "binaries",
+    };
+    format!(
+        "Save an http or https URL to a workspace file, bytes unread, for {corrupts}. The file is \
+         quarantined. The user is asked about the host and the destination first."
+    )
+}
+
 /// Write the descriptions that name other tools again for the list a turn settled on, so a run is
 /// not sent to a tool it is not offered.
 ///
@@ -661,9 +706,26 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
         .iter()
         .map(|tool| tool.function.name.clone())
         .collect();
+    state_what_is_beside_names(tools, &names);
+}
+
+/// [`state_what_is_beside`] for `tools` read beside the tools called `names`, which need not be
+/// the ones `tools` holds: the tools a turn holds back for `load_tool` are written beside the list
+/// the turn offers, and not beside each other (TOOL-6, TOOL-8).
+fn state_what_is_beside_names(tools: &mut [Tool], names: &[String]) {
     let beside = |name: &str| names.iter().any(|offered| offered == name);
     for tool in tools.iter_mut() {
         match tool.function.name.as_str() {
+            "load_skill" => tool.function.description = load_skill_description(&beside),
+            "download_url" => tool.function.description = download_url_description(&beside),
+            "watch_file" if !beside("schedule_next") => {
+                tool.function.description =
+                    tool.function.description.replacen(WATCH_OR_SCHEDULE, "", 1);
+            }
+            "propose_rule" if !beside("remember") => {
+                tool.function.description =
+                    tool.function.description.replacen(RULE_OR_REMEMBER, "", 1);
+            }
             "spawn_processor" => tool.function.description = spawn_processor_description(&beside),
             "read_output" => tool.function.description = read_output_description(&beside),
             "fetch_url" => state_fetch_url_beside(tool, &beside),
@@ -785,10 +847,6 @@ fn state_run_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
         &(run_reference_moves(beside) + &run_text_made_from_it(beside)),
         1,
     );
-    tool.function.description =
-        tool.function
-            .description
-            .replacen(&run_watching(&|_| true), &run_watching(beside), 1);
     if let Some(background) = tool
         .function
         .parameters
@@ -805,42 +863,100 @@ fn state_run_beside(tool: &mut Tool, beside: &dyn Fn(&str) -> bool) {
     }
 }
 
-fn table(
-    scheduling: Scheduling,
-    arming: crate::watch::Arming,
-    deadlines: crate::exec::Deadlines,
-    running: Running,
-) -> Vec<Tool> {
-    // Which of the two answers a request about one file gets. Both exist wherever watches do, and
-    // a description that named neither as the better one would leave the planner picking the one
-    // it read first, which is the read's own paragraph and therefore always the loop.
-    let watching = if arming.offered() {
-        let mut said = " For one file, watch_file outlives this turn.".to_string();
-        // The second half only where there is a schedule_next to keep for something. A turn
-        // offered no way to arrange a later look has nothing to save one for, and saying
-        // otherwise sends it to a name that is not on its list.
-        if scheduling.offered() {
-            said.push_str(" Keep schedule_next for anything else.");
-        }
-        said
+/// What `watch_file` says about `schedule_next`, with its leading space. Dropped where the list does
+/// not hold `schedule_next` (TOOL-6), which includes a turn that holds it back for `load_tool`.
+const WATCH_OR_SCHEDULE: &str = " Use schedule_next instead where what is being waited on is \
+     not one file, or where they asked for their own line to be run again.";
+
+/// What `propose_rule` says about `remember`, with its leading space, where the list holds it.
+const RULE_OR_REMEMBER: &str = " A fact that is not an instruction belongs to remember.";
+
+/// The sentence of `run`'s description that sends a request to watch something to the built-in
+/// skill `watching` (RUN-18), which holds what that paragraph used to say. Replaced by
+/// [`run_watching_inline`] where the turn cannot load the skill ([`state_watching_route`]).
+const WATCH_ROUTE: &str = "Asked to watch something, or to say when it changes, load the \
+     built-in skill watching before you take the first look: a file and a program are watched by \
+     different means, and it says which, and what to say about the next look.";
+
+/// What `run` says about watching where the skill [`WATCH_ROUTE`] names cannot be loaded: a turn
+/// without `load_skill`, or one whose catalogue a definition's `skills:` line narrowed. It names
+/// `read_file` and `job_output` only where `beside` says they are on the list (TOOL-6).
+fn run_watching_inline(beside: &dyn Fn(&str) -> bool) -> String {
+    let file = if beside("read_file") {
+        "A file takes no command: compare read_file's change token from one look with the next."
     } else {
-        String::new()
+        "A file is watched by comparing what one look at it returned with what the next returns."
     };
-    // What a turn asked to report a change does about the next look, in the two descriptions that
-    // route such a request: the read's change token for a file, the run's own output for a
-    // program. Neither technique reaches past this turn by itself, so both have to say where the
-    // later look comes from, and that differs by turn. A planner told to arrange one on a surface
-    // offering no way to arrange it spends a round on a name that is not there, and then has a
-    // refusal to explain to somebody who asked to be told when something changes.
-    let (look_again_after_a_read, look_again_after_a_run) = match scheduling {
-        Scheduling::ArrangingALook => (
-            "Call schedule_next at the end of this turn: you are asked again after the wait with the user's line unchanged, so a request to be told when a file changes is answered by reading it now and scheduling the look that would catch a change. Do not tell somebody to arrange it.",
-            "Take the first look now and call schedule_next at the end of the turn, which has you asked again after the wait with the user's line unchanged.",
-        ),
-        Scheduling::PacingALoop | Scheduling::TheirInterval => (
-            "In a loop the next tick is the next look; there is nothing to arrange.",
-            "In a loop, report this tick's look; the next tick looks again.",
-        ),
+    let program = if beside("job_output") {
+        "A program's own output is watched with background: true and then job_output with \
+         wait_seconds."
+    } else {
+        "A program's own output is watched with background: true, and you are told when it ends."
+    };
+    format!(
+        "Asked to watch something, or to say when it changes, decide first what is being watched. \
+         {file} {program} Neither reaches past this turn by itself, so take the first look now. \
+         Name the looks you compared, never a time of day, which you have no clock for. Where \
+         asked to watch something or be told when it changes, with no further look scheduled, say \
+         so. Any other request gets no sentence about a later look."
+    )
+}
+
+/// Write `run`'s sentence on watching again for a turn that cannot load the skill `watching`:
+/// `skill_listed` says whether the turn's catalogue holds it, and the list says whether
+/// `load_skill` is offered. Where both hold, nothing changes. Called after
+/// [`state_what_is_beside`], on the list the turn settled on.
+pub fn state_watching_route(tools: &mut [Tool], skill_listed: bool) {
+    let names: Vec<String> = tools
+        .iter()
+        .map(|tool| tool.function.name.clone())
+        .collect();
+    let beside = |name: &str| names.iter().any(|offered| offered == name);
+    if skill_listed && beside("load_skill") {
+        return;
+    }
+    let inline = run_watching_inline(&beside);
+    if let Some(run) = tools.iter_mut().find(|tool| tool.function.name == "run") {
+        run.function.description = run.function.description.replacen(WATCH_ROUTE, &inline, 1);
+    }
+}
+
+/// Which of the two answers a request about one file gets, in the `read_file` description, where
+/// the session keeps watches (`arming_offered`). Both exist wherever watches do, and a description
+/// that named neither as the better one would leave the planner picking the one it read first,
+/// which is the read's own paragraph and therefore always the loop.
+///
+/// The second half is said only where there is a `schedule_next` to keep for something
+/// (`scheduling_offered`). A turn offered no way to arrange a later look has nothing to save one
+/// for, and saying otherwise sends it to a name that is not on its list.
+fn read_watching(arming_offered: bool, scheduling_offered: bool) -> String {
+    if !arming_offered {
+        return String::new();
+    }
+    let mut said = " For one file, watch_file outlives this turn.".to_string();
+    if scheduling_offered {
+        said.push_str(" Keep schedule_next for anything else.");
+    }
+    said
+}
+
+/// What a turn asked to report a change does about the next look, in the `read_file` description:
+/// the read's change token for a file. The technique does not reach past this turn by itself, so
+/// the description says where the later look comes from, and that differs by turn. A planner told
+/// to arrange one on a surface offering no way to arrange it spends a round on a name that is not
+/// there, and then has a refusal to explain to somebody who asked to be told when something changes.
+///
+/// Only `read_file` says it. `run` sends a request to watch something to the built-in skill
+/// `watching` (RUN-18), whose body is the same in every turn and points back here for which of
+/// these applies.
+fn look_again(scheduling: Scheduling, arming_offered: bool) -> &'static str {
+    match scheduling {
+        Scheduling::ArrangingALook => {
+            "Call schedule_next at the end of this turn: you are asked again after the wait with the user's line unchanged, so a request to be told when a file changes is answered by reading it now and scheduling the look that would catch a change. Do not tell somebody to arrange it."
+        }
+        Scheduling::PacingALoop | Scheduling::TheirInterval => {
+            "In a loop the next tick is the next look; there is nothing to arrange."
+        }
         // A line the person typed while the session's own loop, goal or watch is live. Something
         // of the session's starts another turn, so the turn is not told that nothing will, and
         // the session drops any wait this turn would ask for, so it is not told to arrange one.
@@ -848,32 +964,82 @@ fn table(
         // request asked about. The loop and the watch say not to wait in the foreground for the
         // look they take; the goal does not, because GOAL-15 has a turn under a goal wait inside
         // the turn for a condition outside the session.
-        Scheduling::UnderALoop => (
-            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where asked to watch something or be told when it changes, report what this look found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
-            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where asked to watch something or be told when it changes, take this look now, report what it found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes.",
-        ),
-        Scheduling::UnderAGoal => (
-            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where asked to watch something or be told when it changes, report what this look found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
-            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where asked to watch something or be told when it changes, take this look now, report what it found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds.",
-        ),
+        Scheduling::UnderALoop => {
+            "This session's loop sends its line again without this turn, and this turn does not set the wait. Where asked to watch something or be told when it changes, report what this look found and say that the loop's next turn looks again at what the loop's line asks about; where the loop's line does not ask about what was asked here, say plainly that no later look at it is coming, and do not wait in this turn for the look the loop's next turn takes."
+        }
+        Scheduling::UnderAGoal => {
+            "This session's goal sends the work back for another turn while its condition is unmet, and this turn does not set the wait. Where asked to watch something or be told when it changes, report what this look found and say that the goal's next turn, while its condition is unmet, looks again only at what the condition asks about; where the condition does not ask about what was asked here, say plainly that no later look at it is coming. What the goal's instructions say about waiting for the condition inside a turn still holds."
+        }
         // The turn is not told which files the session's watches cover, and a session may hold
         // several, so neither wording asks it to compare. Where it may arm a watch, arming one of
         // the file asked about is the later look, and a path already watched arms nothing new, so
         // it is not told that no later look at that file is coming. Where it may not, it is told
         // only what the watches report on, and names no tool it is not offered (ARM-6).
-        Scheduling::UnderAWatch if arming.offered() => (
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, report what this look found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, take this look now and report what it found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming.",
-        ),
-        Scheduling::UnderAWatch => (
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, report what this look found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
-            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, take this look now, report what it found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports.",
-        ),
-        Scheduling::NoLaterLook => (
-            "Nothing asks about this line again. Where asked to watch something or be told when it changes, report this look and say plainly no later look is coming.",
-            "Nothing asks about this line again. Where asked to watch something or be told when it changes, say plainly no later look is coming.",
-        ),
-    };
+        Scheduling::UnderAWatch if arming_offered => {
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, report what this look found; where what was asked about is a file, arm a standing watch of it with watch_file, which reports its change and arms nothing new where a watch already covers that file, and do not wait in this turn for that file to change; where it is not a file, or no watch of it could be armed, say plainly that no later look at it is coming."
+        }
+        Scheduling::UnderAWatch => {
+            "This session's standing watches start a turn only when a file they cover changes, and this turn does not set the wait. They report on the files they cover and on nothing else. Where asked to watch something or be told when it changes, report what this look found, say that this session's standing watches report a change only to the files they cover and that no later look at anything else is coming, and do not wait in this turn for a change one of them reports."
+        }
+        Scheduling::NoLaterLook => {
+            "Nothing asks about this line again. Where asked to watch something or be told when it changes, report this look and say plainly no later look is coming."
+        }
+    }
+}
+
+/// [`look_again`] for a turn that arranges a later look and holds `schedule_next` back for
+/// `load_tool` (TOOL-8): the same route, sent through `load_tool`, since a description names no
+/// tool the list does not hold (TOOL-6).
+const LOOK_AGAIN_AFTER_A_READ_HELD: &str = "The next look is yours to arrange. load_tool lists \
+     the tool that does it: called at the end of this turn, it has you asked again after the \
+     wait with the user's line unchanged, so a request to be told when a file changes is \
+     answered by reading it now and arranging the look that would catch a change. Do not tell \
+     somebody to arrange it.";
+
+/// Write again, for a turn that holds built-ins back for `load_tool` (TOOL-8), the sentences of the
+/// `read_file` description that send the planner to `watch_file` or `schedule_next` where either is
+/// held back (TOOL-6). `held` are the names the turn holds back, which come from the table and the
+/// fixed core list.
+///
+/// The sentence naming `watch_file` is dropped where it is held back, and so is the half that
+/// names `schedule_next` beside it. The sentence that arranges the next look names `load_tool` in
+/// place of `schedule_next`. Called once, after [`state_what_is_beside`], so the description is the
+/// same on every request of the turn whatever is loaded later. Nothing changes where neither tool
+/// is held back.
+pub fn state_what_is_held(tools: &mut [Tool], held: &[String]) {
+    let holds = |name: &str| held.iter().any(|held| held == name);
+    if !holds("watch_file") && !holds("schedule_next") {
+        return;
+    }
+    let read_arranging = look_again(Scheduling::ArrangingALook, false);
+    for tool in tools.iter_mut() {
+        if tool.function.name != "read_file" {
+            continue;
+        }
+        let description = &mut tool.function.description;
+        // The longer first, so the shorter is not matched inside it.
+        for scheduling_offered in [true, false] {
+            let full = read_watching(true, scheduling_offered);
+            let narrowed = match holds("watch_file") {
+                true => String::new(),
+                false => read_watching(true, scheduling_offered && !holds("schedule_next")),
+            };
+            *description = description.replacen(&full, &narrowed, 1);
+        }
+        if holds("schedule_next") {
+            *description = description.replacen(read_arranging, LOOK_AGAIN_AFTER_A_READ_HELD, 1);
+        }
+    }
+}
+
+fn table(
+    scheduling: Scheduling,
+    arming: crate::watch::Arming,
+    deadlines: crate::exec::Deadlines,
+    running: Running,
+) -> Vec<Tool> {
+    let watching = read_watching(arming.offered(), scheduling.offered());
+    let look_again_after_a_read = look_again(scheduling, arming.offered());
     // The two figures `run` quotes, in seconds, wherever its description names them. Written out
     // here because a description is the only place the planner can learn either: a call that names
     // nothing gets the first, and a call may raise its own deadline as far as the second.
@@ -1343,8 +1509,7 @@ fn table(
         ),
         Tool::function(
             "load_skill",
-            "Load a skill you were listed or search_skills found, before its kind of work, and \
-             follow it.",
+            load_skill_description(&|_| true),
             json!({
                 "type": "object",
                 "properties": {
@@ -1484,13 +1649,7 @@ fn table(
                      {deadline_ceiling}"
                 )
                 + "). "
-                + &run_watching(&|_| true)
-                + " "
-                + look_again_after_a_run
-                + " Name the looks you compared, never a time of day, which you have no clock \
-                   for. Where asked to watch something or be told when it changes, with no \
-                   further look scheduled, say so. Any other \
-                   request gets no sentence about a later look.",
+                + WATCH_ROUTE,
             json!({
                 "type": "object",
                 "properties": {
@@ -1711,9 +1870,7 @@ fn table(
         ),
         Tool::function(
             "download_url",
-            "Save an http or https URL to a workspace file, bytes unread, for binaries fetch_url \
-             would corrupt. The file is quarantined. The user is asked about the host and the \
-             destination first.",
+            download_url_description(&|_| true),
             json!({
                 "type": "object",
                 "properties": {
@@ -1767,9 +1924,10 @@ fn table(
              if you need what is in it. Two things follow that are worth saying to the user: a \
              write that restores the same bytes fires the watch, and a change that leaves the \
              modification time alone does not.\n\n\
-             Use this where somebody asked to be told when a file changes. Use schedule_next \
-             instead where what is being waited on is not one file, or where they asked for \
-             their own line to be run again.\n\n\
+             Use this where somebody asked to be told when a file changes."
+                .to_string()
+                + WATCH_OR_SCHEDULE
+                + "\n\n\
              One file, which may not exist yet, never a directory and never a pattern, and the \
              path cannot be changed once the watch is armed. A watch lives at most a week, at \
              most 8 are live at once, and the user sees every live one: they end one with \
@@ -2135,7 +2293,9 @@ pub fn offer_propose_rule(tools: &mut Vec<Tool>) {
         "propose_rule",
         "Propose a standing rule for working with this user, in your own words, not copied \
          from a file or web page. The user is asked and may keep, edit or refuse it; nothing is \
-         written unless kept. A fact that is not an instruction belongs to remember.",
+         written unless kept."
+            .to_string()
+            + RULE_OR_REMEMBER,
         json!({
             "type": "object",
             "properties": {
@@ -2366,29 +2526,152 @@ pub fn offer_message_session(tools: &mut Vec<Tool>) {
     tools.push(message);
 }
 
-/// Add `load_tool` to the list of a turn whose server tools are offered by name only (SERVERS-16).
+/// The built-in tools offered in full on every request a turn makes (TOOL-8). Every other built-in
+/// the turn would offer is held back and offered by name under `load_tool` until the planner loads
+/// it. A constant, so which tools are offered in full is decided by this list and by the names the
+/// planner passes to `load_tool`, and by nothing a file, a result or a server holds.
+pub const CORE: [&str; 17] = [
+    "read_file",
+    "list_files",
+    "search",
+    "write_file",
+    "edit_file",
+    "run",
+    "job_output",
+    "read_output",
+    "vet_content",
+    "spawn_processor",
+    "spawn_agent",
+    "load_skill",
+    "search_skills",
+    "ask_user",
+    "todo_write",
+    "fetch_url",
+    "read_git",
+];
+
+/// The built-in tools a turn would offer and holds back until the planner loads one by its name
+/// (TOOL-8), with those it has loaded so far.
+///
+/// Holds whole definitions, written for the turn as the rest of its list is, so a load offers
+/// exactly what the turn would have offered from the start.
+#[derive(Debug, Clone, Default)]
+pub struct Deferred {
+    held: Vec<Tool>,
+    /// The names loaded so far this turn, in the order they were loaded. Always names `held`
+    /// holds, since [`Deferred::load`] takes a name only by finding it there.
+    loaded: Vec<String>,
+}
+
+impl Deferred {
+    /// Take out of `offered` every built-in that is not in [`CORE`] and that `in_full` does not
+    /// name, keeping the order of both. `in_full` is a delegate definition's own `tools:` line,
+    /// which offers what it names in full.
+    pub fn split(offered: &mut Vec<Tool>, in_full: &[String]) -> Self {
+        let (kept, held): (Vec<Tool>, Vec<Tool>) =
+            std::mem::take(offered).into_iter().partition(|tool| {
+                let name = tool.function.name.as_str();
+                CORE.contains(&name) || in_full.iter().any(|named| named == name)
+            });
+        *offered = kept;
+        Self {
+            held,
+            loaded: Vec::new(),
+        }
+    }
+
+    /// Whether anything is held back, loaded or not, which is where the turn offers `load_tool`.
+    pub fn holds_any(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    /// The names held back, in the order the turn's list had them.
+    pub fn names(&self) -> Vec<String> {
+        self.held
+            .iter()
+            .map(|tool| tool.function.name.clone())
+            .collect()
+    }
+
+    /// Whether the tool called `name`, compared exactly, is held back and loaded already. `None`
+    /// where nothing of that name is held: nothing falls back to a prefix, another case or a
+    /// nearest name (TOOL-8).
+    pub fn named(&self, name: &str) -> Option<bool> {
+        self.held
+            .iter()
+            .any(|tool| tool.function.name == name)
+            .then(|| self.loaded.iter().any(|loaded| loaded == name))
+    }
+
+    /// Whether the tool called `name` is held back and not loaded, so a call to it is refused.
+    pub fn is_unloaded(&self, name: &str) -> bool {
+        self.named(name) == Some(false)
+    }
+
+    /// Load the tool called `name`, and hand back its definition the first time, for the turn to
+    /// append to its list. Nothing where no such tool is held or it is loaded already.
+    pub fn load(&mut self, name: &str) -> Option<Tool> {
+        if self.named(name) != Some(false) {
+            return None;
+        }
+        self.loaded.push(name.to_string());
+        self.held
+            .iter()
+            .find(|tool| tool.function.name == name)
+            .cloned()
+    }
+
+    /// The tools held back, loaded or not, in the order the turn's list had them.
+    pub fn held(&self) -> &[Tool] {
+        &self.held
+    }
+
+    /// Write the descriptions of the held tools from the list the turn offers, as
+    /// [`state_what_is_beside`] writes the turn's own: beside the turn's list and not beside each
+    /// other, so a held tool loaded later names no tool that is still held back (TOOL-6, TOOL-8).
+    /// Called once, so a tool loaded later is offered with the description it was held with.
+    pub fn state_what_is_beside(&mut self, offered: &[Tool]) {
+        let names: Vec<String> = offered
+            .iter()
+            .map(|tool| tool.function.name.clone())
+            .collect();
+        state_what_is_beside_names(&mut self.held, &names);
+    }
+}
+
+/// Add `load_tool` to the list of a turn that holds tools back to be offered by name (TOOL-8,
+/// SERVERS-16).
 ///
 /// Built here rather than in the table because it exists only where tools are deferred, and a
 /// description naming a tool that is not on the list sends the planner to a name that is not
-/// there. `names` are the `alias:tool` of tools a person vouched for, so nothing a server wrote
-/// decides what is listed.
-pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
+/// there. `built_in` are names out of the table and `servers` the `alias:tool` of tools a person
+/// vouched for, so nothing a server wrote decides what is listed.
+pub fn offer_tool_loader(tools: &mut Vec<Tool>, built_in: &[String], servers: &[String]) {
+    let mut listed = String::new();
+    if !built_in.is_empty() {
+        listed.push_str(&format!(" Tools of this program: {}.", built_in.join(", ")));
+    }
+    if !servers.is_empty() {
+        listed.push_str(&format!(
+            " Tools of the MCP servers the user connected, written alias:tool, each call to \
+             which is still put to the user: {}.",
+            servers.join(", ")
+        ));
+    }
     let mut loader = Tool::function(
         "load_tool",
         format!(
-            "Load a tool of an MCP server the user connected, so that it is offered to you from \
-             your next request on. These tools exist but are not shown to you until you name one, \
-             to keep this conversation short. Only the names listed here exist; there is nothing \
-             to search. The user is still asked before each call to a loaded tool. The tools: {}.",
-            names.join(", ")
+            "Load a tool by its name, so that it is offered to you from your next request on and \
+             for the rest of this turn. These tools exist but are not shown to you until you name \
+             one, to keep this conversation short. A call to one of them before it is loaded is \
+             refused. Only the names listed here exist; there is nothing to search.{listed}"
         ),
         json!({
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "The name of a tool exactly as it is listed here, written \
-                                    alias:tool."
+                    "description": "The name of a tool exactly as it is listed here."
                 }
             },
             "required": ["name"]
