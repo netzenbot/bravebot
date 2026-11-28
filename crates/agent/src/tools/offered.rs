@@ -690,6 +690,44 @@ fn download_url_description(beside: &dyn Fn(&str) -> bool) -> String {
     )
 }
 
+/// The description of `ask_user`, naming each of `list_files`, `search`, `read_file` and `run`, the
+/// tools it sends the planner to for a fact about this machine, only where `beside` says it is on
+/// the list. A list holding none of them is told to say what it could not find out.
+///
+/// ASK-12. The text does not depend on the mode. The sentences it adds say that a question costs
+/// the user's attention and how to word a question for somebody who has not seen what the planner
+/// read. They name no mode and no place a question goes, because the planner is told of no mode
+/// but plan mode (MODE-3, MODE-8) and nothing about what decides (AUTO-7). The sentence that the
+/// questions are put to the user one at a time is not part of ASK-12.
+fn ask_user_description(beside: &dyn Fn(&str) -> bool) -> String {
+    let looking: Vec<&str> = ["list_files", "search", "read_file", "run"]
+        .into_iter()
+        .filter(|name| beside(name))
+        .collect();
+    let look = match looking.as_slice() {
+        [] => "say in your answer that you could not find it out instead;".to_string(),
+        [one] => format!("look with {one} first;"),
+        [init @ .., last] => format!("look with {} or {last} first;", init.join(", ")),
+    };
+    format!(
+        "Ask the user up to four questions, put one at a time, and wait. Only for what you \
+         cannot find out yourself; not for a fact about this machine: {look} a quarantined \
+         result does not stop you asking after. Do not ask a question whose answer the request \
+         states. Do not ask whether to do what the user asked, or whether to do it \
+         automatically, because they asked for it. What is left to ask is a choice that the \
+         request leaves open and that differs in consequence, such as which of two accounts to \
+         send from. Each question you ask costs the user's attention. Ask everything the plan \
+         turns on in one call rather than a question per turn. Offer concrete options where you \
+         can; the user may also answer in their own words or skip a question, and a skipped \
+         question is an answer to work with rather than a reason to ask again. Write each \
+         question and option so that somebody who has not seen what you read can answer it, in \
+         plain words saying what they would see or get, with no issue numbers, clause IDs or \
+         internal names; the user sees only the question, its options and the text of your \
+         reply before the call, not files you wrote or results you read, so state there what \
+         each option does and the facts the choice rests on."
+    )
+}
+
 /// Write the descriptions that name other tools again for the list a turn settled on, so a run is
 /// not sent to a tool it is not offered.
 ///
@@ -712,15 +750,12 @@ pub fn state_what_is_beside(tools: &mut [Tool]) {
 /// [`state_what_is_beside`] for `tools` read beside the tools called `names`, which need not be
 /// the ones `tools` holds: the tools a turn holds back for `load_tool` are written beside the list
 /// the turn offers, and not beside each other (TOOL-6, TOOL-8).
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm for each tool whose text names another, all beside the list a turn settled on"
-)]
 fn state_what_is_beside_names(tools: &mut [Tool], names: &[String]) {
     let beside = |name: &str| names.iter().any(|offered| offered == name);
     for tool in tools.iter_mut() {
         match tool.function.name.as_str() {
             "load_skill" => tool.function.description = load_skill_description(&beside),
+            "ask_user" => tool.function.description = ask_user_description(&beside),
             "download_url" => tool.function.description = download_url_description(&beside),
             "watch_file" if !beside("schedule_next") => {
                 tool.function.description =
@@ -901,9 +936,10 @@ fn run_watching_inline(beside: &dyn Fn(&str) -> bool) -> String {
     format!(
         "Asked to watch something, or to say when it changes, decide first what is being watched. \
          {file} {program} Neither reaches past this turn by itself, so take the first look now. \
-         Name the looks you compared, never a time of day, which you have no clock for. Where \
-         asked to watch something or be told when it changes, with no further look scheduled, say \
-         so. Any other request gets no sentence about a later look."
+         Say which window you watched, or which looks you compared, rather than a time of day, \
+         which you have no clock for. Where the request is to watch something or to be told when \
+         it changes, and you have scheduled no further look, say that too. Any other request gets \
+         no sentence about a later look."
     )
 }
 
@@ -1070,13 +1106,6 @@ fn table(
             "elsewhere no tool on your list reads that history",
             "--follow, blame and the rest cannot be read here: report what you could not read.",
         )
-    };
-    // The tools ask_user sends the planner to for a fact about this machine. `run` is named only
-    // where this turn holds one; a turn without it is sent to the others alone.
-    let looking_tools = if running.offered() {
-        "list_files, search, read_file or run"
-    } else {
-        "list_files, search or read_file"
     };
     // The paragraphs of the read_file description that name another tool. The same for a turn with
     // `run` and one without; `state_what_is_beside` rewrites them for the list a turn settled on.
@@ -1550,25 +1579,7 @@ fn table(
         // The sentence that the questions are put to the user one at a time is not part of ASK-12.
         Tool::function(
             "ask_user",
-            format!(
-                "Ask the user up to four questions, put one at a time, and wait. Only for what you \
-             cannot find out yourself; not for a fact about this machine: look with \
-             {looking_tools} first; a quarantined result does not \
-             stop you asking after. Do \
-             not ask a question whose answer the request states. Do not ask whether to do what \
-             the user asked, or whether to do it automatically, because they asked for it. What \
-             is left to ask is a choice that the request leaves open and that differs in \
-             consequence, such as which of two accounts to send from. Each question you ask \
-             costs the user's attention. Ask everything the plan turns on in one call rather \
-             than a question per turn. Offer concrete \
-             options where you can; the user may also answer in their own words or skip a \
-             question, and a skipped question is an answer to work with rather than a reason to \
-             ask again. Write each question and option so that somebody who has not seen what \
-             you read can answer it, in plain words saying what they would see or get, with no \
-             issue numbers, clause IDs or internal names; the user sees only the question, its \
-             options and the text of your reply before the call, not files you wrote or results \
-             you read, so state there what each option does and the facts the choice rests on."
-            ),
+            ask_user_description(&|name| name != "run" || running.offered()),
             json!({
                 "type": "object",
                 "properties": {

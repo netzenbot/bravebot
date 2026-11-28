@@ -1615,7 +1615,6 @@ fn the_skill_download_and_ask_user_descriptions_name_only_the_tools_the_list_hol
 /// not beside the other held tools. The regression it rejects is a loaded tool whose description
 /// sends the planner to another that is still held back.
 #[test]
-#[expect(clippy::expect_used, reason = "a test fails by panicking")]
 fn a_held_back_tool_names_no_tool_the_offered_list_lacks() {
     let mut every = available(
         Scheduling::ArrangingALook,

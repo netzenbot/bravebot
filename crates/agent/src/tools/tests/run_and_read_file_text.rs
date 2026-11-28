@@ -766,7 +766,8 @@ fn no_further_look_is_reported_only_for_a_request_to_watch_or_be_told_of_a_chang
     state_watching_route(&mut offered, true);
     let inline = description_of(&offered, "run");
     assert!(
-        sentence_with(&inline, "no further look scheduled, say so").starts_with(WATCH_REQUEST),
+        sentence_with(&inline, "scheduled no further look, say that too")
+            .starts_with("Where the request is to watch"),
         "run has the planner report no further look for any request: {inline}"
     );
     assert!(
