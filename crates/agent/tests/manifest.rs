@@ -517,6 +517,42 @@ fn the_planner_is_shown_capabilities_and_no_tool_names() {
     );
 }
 
+/// A planner that has not been told a file can be copied from a slot a read filled concludes that
+/// every slot is for one file only, and refuses the plan. The request that asks for the JSON says
+/// both halves: a read slot may be written to any path, and a transform's answer goes back to its
+/// own file only. The first request, which asks for the goal in plain words, is not the one that
+/// has to say it.
+#[test]
+fn the_fit_request_says_a_read_slot_can_be_copied_and_a_transforms_answer_cannot() {
+    let scratch = Scratch::new("copy-prompt");
+    std::fs::write(scratch.path.join("a.md"), "hello").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "a.md", "out_slot": "doc"}},
+            {"capability": "FILE_WRITE", "args": {"path": "b.md", "from_slot": "doc"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    run(&config, &workspace, "copy a.md to b.md", &mut sink).expect("runs");
+
+    let _shaping = received.recv().expect("the shape request");
+    let planning = received.recv().expect("the fit request");
+    for sentence in [
+        "FILE_WRITE from_slot can write that slot to any workspace path",
+        "read the whole of it into a slot and write that slot to the new path, with no TRANSFORM between the two",
+        "back to that file and to no other",
+    ] {
+        assert!(
+            planning.contains(sentence),
+            "the fit request lacks: {sentence}"
+        );
+    }
+}
+
 /// BACKEND-15: both planning requests of a manifest run go out with no tool list even when the model
 /// they are sent to states one in its own `options`, and the options that name no tool still
 /// arrive. The regression it rejects is a gateway client that adds each option key the body lacks:
@@ -2031,6 +2067,110 @@ fn a_planned_answer_cannot_be_written_to_a_file_it_is_not_about() {
         std::fs::read_to_string(scratch.path.join("in.md")).unwrap(),
         original,
         "the document it was about was changed instead"
+    );
+}
+
+/// A slot a file read fills holds the file's own text and is not a processor's answer, so a plan
+/// that writes it to a second path copies the file. The source has lines the scripted planner
+/// cannot know, so a body written as a literal would not match, and the run makes the two planning
+/// requests and nothing else.
+#[test]
+fn a_file_read_into_a_slot_is_copied_to_another_path() {
+    let scratch = Scratch::new("copy-read-slot");
+    let original: String = (1..=60)
+        .map(|n| format!("line {n} of the source\n"))
+        .collect();
+    std::fs::write(scratch.path.join("source.txt"), &original).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "source.txt", "out_slot": "src"}},
+            {"capability": "FILE_WRITE", "args": {"path": "copy.txt", "from_slot": "src"}},
+        ])),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(
+        &config,
+        &workspace,
+        "copy source.txt to copy.txt",
+        &mut sink,
+    )
+    .expect("a read slot is written to a second path");
+
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copy.txt")).unwrap(),
+        original,
+        "the copy differs from the source"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("source.txt")).unwrap(),
+        original,
+        "the source was changed"
+    );
+    assert_eq!(
+        outcome.steps, 2,
+        "the driver ran a step the plan did not have"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        2,
+        "a copy made a request besides the two planning requests"
+    );
+}
+
+/// A plan may read the file into one slot, write that slot to the second path, and ask a transform
+/// over the same slot only for the reply to show. The transform's answer is for `source.txt` and
+/// is shown, never written, so it does not stop the copy. The write takes the slot the read
+/// filled, which holds the source's lines the scripted processor does not repeat.
+#[test]
+fn a_copy_from_the_read_slot_is_not_stopped_by_a_transform_that_only_supplies_the_reply() {
+    let scratch = Scratch::new("copy-with-reply");
+    let original: String = (1..=60)
+        .map(|n| format!("line {n} of the source\n"))
+        .collect();
+    std::fs::write(scratch.path.join("source.txt"), &original).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve(vec![
+        any_shape(),
+        plan(json!([
+            {"capability": "FILE_READ", "args": {"path": "source.txt", "out_slot": "src"}},
+            {"capability": "TRANSFORM", "args": {"reads": ["src"], "instruction": "reply with the word: done", "out_slot": "reply"}},
+            {"capability": "FILE_WRITE", "args": {"path": "copy.txt", "from_slot": "src"}},
+            {"capability": "ANSWER", "args": {"from_slot": "reply"}},
+        ])),
+        says("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+
+    let outcome = run(
+        &config,
+        &workspace,
+        "copy source.txt to copy.txt",
+        &mut sink,
+    )
+    .expect("the copy and the reply both run");
+
+    assert_eq!(outcome.reply_for_display(), "done");
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("copy.txt")).unwrap(),
+        original,
+        "the copy differs from the source"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("source.txt")).unwrap(),
+        original,
+        "the source was changed"
+    );
+    assert_eq!(
+        received.try_iter().count(),
+        3,
+        "shape, plan and one processor call"
     );
 }
 

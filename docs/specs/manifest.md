@@ -249,6 +249,12 @@ more as it stands, sharing that one further try. A slot only shown to the person
 remark to land on, and what the processor said reaches the person either way, so there it stands as
 the answer.
 
+A slot a `FILE_READ` fills holds what the read returned and is not a processor's answer, so a plan
+may write it to any workspace path, and a plan copies a file by reading it and writing the slot. A
+processor's answer may be written only to the file it is about ([PROC-6](processors.md#PROC-6)), so
+a plan that puts a transform between the read and the write is refused at the write. The planner is
+told both in the request that asks for the plan as JSON.
+
 `verified-by: bravebot_core::policy::a_step_result_is_quarantined_whatever_its_label`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_does_not_become_a_file`
 `verified-by: bravebot_agent::manifest::an_unmarked_transform_is_asked_once_more_for_its_document`
@@ -257,6 +263,9 @@ the answer.
 `verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_only_shown_stands_as_the_answer`
 `verified-by: bravebot_agent::manifest::an_unmarked_answer_for_a_slot_a_write_also_reads_still_fails`
 `verified-by: bravebot_agent::manifest::a_slot_no_step_reads_is_never_opened`
+`verified-by: bravebot_agent::manifest::a_file_read_into_a_slot_is_copied_to_another_path`
+`verified-by: bravebot_agent::manifest::a_copy_from_the_read_slot_is_not_stopped_by_a_transform_that_only_supplies_the_reply`
+`verified-by: bravebot_agent::manifest::the_fit_request_says_a_read_slot_can_be_copied_and_a_transforms_answer_cannot`
 
 <a id="MANIFEST-9"></a>
 ### MANIFEST-9: the default is the turn loop

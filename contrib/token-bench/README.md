@@ -240,6 +240,12 @@ object as a plain turn, built from the same call list in `crates/cli/src/main.rs
 `tokens` covering every round and check of a goal run. A manifest run names no session. Its calls are
 the plan's steps, and its `steps` is the plan's length.
 
+The plan a manifest run needs for this task reads `source.txt` into a slot and writes that slot to
+`copy.txt`, with no transform between them. In a plan, a transform's answer can be written only back
+to the file it was given. PROC-6 also allows a new file in the session's scratch directory for an
+answer about references that are no file, and a plan names only workspace paths, so a plan that puts a
+transform in the copy is refused at the write.
+
 The check reads the workspace: `copy.txt` has to hold the content of `source.txt`, and `source.txt`
 has to be unchanged, whatever the reply says. The other tools have no goal or manifest mode, so
 they run `plain_copy` only, and their figure is the baseline. They are not scored as failures on the

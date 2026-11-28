@@ -232,10 +232,16 @@ file's contents, read it into a slot and TRANSFORM that slot: the transform is a
 that does see the text. To answer the user, ANSWER a slot a transform produced. Only use \
 FILE_WRITE with contents for a file whose whole body you can write from the task alone.
 
+A slot that FILE_READ fills holds the text that read returned, the whole file unless offset or \
+limit pages it, and FILE_WRITE from_slot can write that slot to any workspace path. So to copy a \
+file, read the whole of it into a slot and write that slot to the new path, with no TRANSFORM \
+between the two. Do not give the copy's body as contents, since you cannot know it.
+
 A transform's answer belongs to the document it was given, and FILE_WRITE from_slot writes it \
-back to that file and to no other. So to rewrite a file, read the whole of that one file into a \
-slot and transform that slot alone. A transform over several slots, or over anything but a whole \
-file, answers for no document: ANSWER can show what it produced, and no write can take it.";
+back to that file and to no other workspace path. So to rewrite a file, read the whole of that one \
+file into a slot and transform that slot alone. A transform over several slots, or over anything \
+but a whole file, answers for no document: ANSWER can show what it produced, and no write can take \
+it.";
 
 /// How the planner is told about one capability.
 ///
