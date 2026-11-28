@@ -985,8 +985,13 @@ cat > \"$d/request\"
         assert!(error.to_string().contains("is not known"), "{error}");
     }
 
+    /// The bound counts from the authority's start, so it has to be longer than the script takes to
+    /// start and answer on a host that is running many other builds. A bound shorter than that ends
+    /// the call as `TimedOut` before the reply, which is not what this test is about. The call is
+    /// then waited on to the bound, so a longer one costs the test that much time.
     #[test]
     fn an_authority_that_answers_and_does_not_exit_is_stopped_at_the_bound() {
+        const BOUND: Duration = Duration::from_secs(8);
         let program = Program::new(
             "lingers",
             "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":1}'\nexec >&-\nsleep 60\n",
@@ -994,11 +999,12 @@ cat > \"$d/request\"
         let started = Instant::now();
         let reply = program
             .authority()
-            .with_limit(Duration::from_secs(2))
+            .with_limit(BOUND)
             .exchange(b"{}".to_vec())
             .unwrap();
         assert_eq!(reply, b"{\"ok\":1}");
-        assert!(started.elapsed() < Duration::from_secs(10));
+        // The script sleeps 60 seconds, so a call that returns well before that was stopped.
+        assert!(started.elapsed() < Duration::from_secs(40));
     }
 
     #[test]
