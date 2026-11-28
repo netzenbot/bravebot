@@ -89,8 +89,9 @@ fn seam_mentions(manifest: &str) -> (Vec<String>, Vec<String>) {
     (outside, inside)
 }
 
-/// Directories no walk of the repository goes into: built output, installed packages, git's own
-/// files, a sibling checkout kept under `.worktrees` and a bytecode cache.
+/// Directories no walk of the repository goes into by name: built output, installed packages, git's
+/// own files, a sibling checkout kept under `.worktrees` and a bytecode cache. A nested checkout under
+/// any other name is left out by [`is_a_nested_checkout`], so this list is not what keeps one out.
 const NOT_WALKED: [&str; 5] = [
     "target",
     "node_modules",
@@ -107,8 +108,17 @@ fn is_real_directory(entry: &std::fs::DirEntry) -> bool {
     entry.file_type().is_ok_and(|kind| kind.is_dir())
 }
 
-/// Every file under `directory` that `keep` accepts, by path, depth first. A link to a directory is
-/// neither walked nor kept.
+/// Whether `directory`, below the directory a walk started in, is the root of a checkout of its own:
+/// it holds a `.git` file, as a linked worktree does, or a `.git` directory, as a clone does. Claude
+/// Code keeps its worktrees under `.claude/worktrees`, and a copy of the repository there has its own
+/// manifests, `Makefile` and scripts, which a walk would read a second time as the repository's. The
+/// directory a walk starts in is not asked, since it is the checkout being read and holds `.git` too.
+fn is_a_nested_checkout(directory: &std::path::Path) -> bool {
+    directory.join(".git").symlink_metadata().is_ok()
+}
+
+/// Every file under `directory` that `keep` accepts, by path, depth first. A link to a directory and
+/// a nested checkout of the repository ([`is_a_nested_checkout`]) are neither walked nor kept.
 fn files_where(
     directory: &std::path::Path,
     keep: &impl Fn(&std::path::Path) -> bool,
@@ -121,7 +131,8 @@ fn files_where(
         let path = entry.path();
         let name = entry.file_name();
         if path.is_dir() {
-            if is_real_directory(&entry) && !NOT_WALKED.iter().any(|skipped| name == *skipped) {
+            let skipped = NOT_WALKED.iter().any(|skipped| name == *skipped);
+            if is_real_directory(&entry) && !skipped && !is_a_nested_checkout(&path) {
                 found.extend(files_where(&path, keep));
             }
         } else if keep(&path) {
@@ -526,8 +537,8 @@ fn holds_a_command(path: &std::path::Path) -> bool {
         || path.extension().is_some_and(|extension| extension == "rs"))
 }
 
-/// Every file under `directory` the walk for commands reads, sorted. A link to a directory is
-/// neither walked nor read.
+/// Every file under `directory` the walk for commands reads, sorted. A link to a directory and a
+/// nested checkout of the repository ([`is_a_nested_checkout`]) are neither walked nor read.
 fn command_paths(directory: &std::path::Path) -> Vec<PathBuf> {
     fn walk(directory: &std::path::Path, found: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(directory) else {
@@ -541,7 +552,7 @@ fn command_paths(directory: &std::path::Path) -> Vec<PathBuf> {
                     .iter()
                     .chain(NOT_WALKED_FOR_COMMANDS.iter())
                     .any(|skipped| name == *skipped);
-                if is_real_directory(&entry) && !skipped {
+                if is_real_directory(&entry) && !skipped && !is_a_nested_checkout(&path) {
                     walk(&path, found);
                 }
             } else if holds_a_command(&path) {
@@ -1341,6 +1352,12 @@ fn the_clause_names_what_the_command_guard_reads_and_leaves_out() {
             missing.push(format!("{file}: {word}"));
         }
     }
+    // The walks leave out a nested checkout by its `.git`, which is no name on a list.
+    for stated in ["nested checkout", "`.claude/worktrees`"] {
+        if !body.contains(stated) {
+            missing.push(stated.to_string());
+        }
+    }
     assert!(
         missing.is_empty(),
         "CHATGPT-2 does not name what the guard reads or leaves out: {missing:?}"
@@ -1477,6 +1494,68 @@ fn the_walks_read_a_linked_directory_only_where_it_is_and_read_a_linked_file() {
             root.join("crate/Cargo.toml")
         ],
         "the manifest walk followed a link to a directory or left out a link to a file"
+    );
+}
+
+/// A directory below the root that holds a `.git` file or a `.git` directory is a checkout of its
+/// own, such as a worktree Claude Code makes under `.claude/worktrees`, and a walk reads its manifests
+/// and commands as the repository's own a second time. The fixture puts one under a name no list
+/// holds, `.claude/worktrees/x` with a `.git` file and `some/other/dir` with a `.git` directory, each
+/// with a manifest and a `Makefile`. The root holds a `.git` directory and is still walked, and so is a
+/// plain directory with no `.git`.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+fn the_walks_leave_out_a_nested_checkout_under_any_name_and_read_the_root_and_a_plain_directory() {
+    // Under the workspace, because the command walk names a file by its path relative to it, and
+    // under `target`, which the walks of the repository leave out.
+    let root = workspace().join(format!("target/seam-nested-{}", std::process::id()));
+    std::fs::remove_dir_all(&root).ok();
+    let file = |path: &str, text: &str| {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().expect("a directory")).expect("make the directory");
+        std::fs::write(path, text).expect("write the file");
+    };
+    file(".git/HEAD", "ref: refs/heads/main\n");
+    file("Cargo.toml", "[workspace]\n");
+    file("Makefile", "build:\n\tcargo build\n");
+    file("crates/a/Cargo.toml", "[package]\n");
+    file("crates/a/build.sh", "cargo build\n");
+    file("plain/sub/Cargo.toml", "[package]\n");
+    file("plain/sub/run.sh", "cargo build\n");
+    for nested in [".claude/worktrees/x", "some/other/dir"] {
+        file(&format!("{nested}/Cargo.toml"), "[workspace]\n");
+        file(&format!("{nested}/Makefile"), "build:\n\tcargo build\n");
+        file(&format!("{nested}/crates/a/Cargo.toml"), "[package]\n");
+        file(&format!("{nested}/crates/a/build.sh"), "cargo build\n");
+    }
+    // A worktree has a `.git` file, a clone a `.git` directory.
+    file(
+        ".claude/worktrees/x/.git",
+        "gitdir: /elsewhere/.git/worktrees/x\n",
+    );
+    file("some/other/dir/.git/HEAD", "ref: refs/heads/main\n");
+
+    let commands = command_paths(&root);
+    let manifests = files_where(&root, &|path| path.ends_with("Cargo.toml"));
+    std::fs::remove_dir_all(&root).ok();
+
+    assert_eq!(
+        commands,
+        [
+            root.join("Makefile"),
+            root.join("crates/a/build.sh"),
+            root.join("plain/sub/run.sh")
+        ],
+        "the command walk read a nested checkout, or left out the root or a plain directory"
+    );
+    assert_eq!(
+        manifests,
+        [
+            root.join("Cargo.toml"),
+            root.join("crates/a/Cargo.toml"),
+            root.join("plain/sub/Cargo.toml")
+        ],
+        "the manifest walk read a nested checkout, or left out the root or a plain directory"
     );
 }
 

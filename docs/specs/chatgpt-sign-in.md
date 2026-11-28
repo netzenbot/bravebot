@@ -194,8 +194,10 @@ Four more tests read the tree for a way the seam could reach a release, and each
 no more.
 
 - One reads every `Cargo.toml` in the repository, the fuzz package's included, and every `.cargo/config*`
-  file, and walks none of `target`, `node_modules`, `.git`, `.worktrees`, `__pycache__` and a link to a
-  directory. It fails if the feature is named anywhere but its declaration in `bravebot-skus` and
+  file, and walks none of `target`, `node_modules`, `.git`, `.worktrees`, `__pycache__`, a link to a
+  directory and a nested checkout, which is a directory below the root that holds a `.git` file or a `.git`
+  directory, wherever it is kept (Claude Code keeps its worktrees under `.claude/worktrees`). The root
+  holds `.git` and is walked. It fails if the feature is named anywhere but its declaration in `bravebot-skus` and
   `bravebot-config` and the `[dev-dependencies]` of the three crates above. It decodes the escapes of a TOML string that write a
   character by its number (`\u002d`) before it looks, so `"test\u002dhosts"` is the feature, because the
   workspace has no TOML parser and the crate of the test depends on none. It fails as
@@ -278,6 +280,7 @@ compiled in.
 `verified-by: bravebot_cli::test_hosts_seam::the_command_reader_sees_a_seam_and_every_feature_however_a_command_spells_them`
 `verified-by: bravebot_cli::test_hosts_seam::the_command_reader_sees_what_undoes_the_refusal_and_a_profile_of_its_own`
 `verified-by: bravebot_cli::test_hosts_seam::the_command_walk_reads_a_file_whatever_it_is_called_and_leaves_out_what_the_clause_names`
+`verified-by: bravebot_cli::test_hosts_seam::the_walks_leave_out_a_nested_checkout_under_any_name_and_read_the_root_and_a_plain_directory`
 `verified-by: bravebot_cli::test_hosts_seam::the_clause_names_what_the_command_guard_reads_and_leaves_out`
 `verified-by: bravebot_cli::test_hosts_seam::the_bodies_that_make_a_host_and_every_reader_of_the_stand_in_variable_and_the_token_are_pinned`
 `verified-by: bravebot_cli::test_hosts_seam::only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam`
@@ -2763,7 +2766,9 @@ These are the places where another spec states something about this service, eac
 - The guards of the `test-hosts` seam read text. They do not read a command kept under `docs/specs`, in a Rust
   source (a `build.rs`, or a test that runs `cargo`), in a file with a NUL byte, in a directory named
   `target`, `node_modules`, `.git`, `.worktrees`, `__pycache__`, `dist`, `out`, `build` or `.docusaurus` (a
-  manifest under `target` is not read either), under a link to a directory (`make init` links each skill
+  manifest under `target` is not read either), in a nested checkout of the repository (a directory below the
+  root that holds a `.git` file or directory, such as a Claude Code worktree under `.claude/worktrees`, whose
+  copy of each file would be counted a second time), under a link to a directory (`make init` links each skill
   under `.claude/skills` and others to `agents/skills`, which is read once where it is), or outside the
   repository, such as a person's `~/.cargo/config.toml` or a variable set on a build machine, and they do not see a command that builds a
   name or a flag when it runs, such as `f=test-; cargo build --features "${f}hosts"`. A release built that way
