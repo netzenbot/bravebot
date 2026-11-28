@@ -48,19 +48,41 @@ fn a_home_with_a_plugin_on(scratch: &Path, moment: &str) -> (PathBuf, PathBuf) {
     )
     .expect("hooks");
     let script = source.join("hook.sh");
-    std::fs::write(
+    write_script(
         &script,
-        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
-    )
-    .expect("script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        &format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    );
     let home = scratch.join("state");
-    bravebot_agent::plugins::install(&source, &home).expect("install");
+    install_plugin(&source, &home);
     (home, marker)
 }
 
 fn ran(marker: &Path) -> usize {
     std::fs::read_to_string(marker).map_or(0, |text| text.lines().count())
+}
+
+/// Write `body` to `script` and make it executable, with no program being started meanwhile.
+///
+/// A test that writes a program races every other test in this binary. Between a sibling thread's
+/// fork and its exec the child holds a copy of every descriptor this process had open, including
+/// the one the script is being written through, and `execve` answers `ETXTBSY` for a file anyone
+/// holds open for writing. A hook that fails to start that way is not tried again, so a test sees
+/// a marker that never appears. Every start of a program takes the sandbox's spawn gate, so a
+/// write made under it has no fork overlapping it.
+fn write_script(script: &Path, body: &str) {
+    bravebot_sandbox::process::creating_a_channel(|| {
+        std::fs::write(script, body).expect("script");
+        std::fs::set_permissions(script, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+    });
+}
+
+/// Install the plugin at `source` under `home`, with no program being started meanwhile, for the
+/// reason [`write_script`] gives: the install copies the script, and the copy is what a hook runs.
+fn install_plugin(source: &Path, home: &Path) {
+    bravebot_sandbox::process::creating_a_channel(|| {
+        bravebot_agent::plugins::install(source, home).expect("install");
+    });
 }
 
 /// One turn in `workspace`, in `session`, with `home` as the state directory.
@@ -177,11 +199,10 @@ fn a_script_edited_after_a_yes_stops_the_hook_and_the_turn_names_the_plugin_once
     assert_eq!(ran(&marker), 1);
 
     let script = bravebot_agent::plugins::installed_dir(&home, "demo").join("hook.sh");
-    std::fs::write(
+    write_script(
         &script,
-        format!("#!/bin/sh\necho edited >> '{}'\n", marker.display()),
-    )
-    .expect("edit");
+        &format!("#!/bin/sh\necho edited >> '{}'\n", marker.display()),
+    );
     let first = a_turn_outcome(&workspace, &home, &session, &mut person);
     let again = a_turn_outcome(&workspace, &home, &session, &mut person);
 
@@ -374,7 +395,8 @@ fn a_plugin_hook_on_session_ended_fires_only_one_already_answered_and_never_asks
 
     // No yes: the session begins and ends and the hook does not fire.
     let mut person = AnswersHooks::new(Decision::Approve);
-    let mut moments = moments_that_can_ask(&home, &scratch.path, &AccountSession::begin());
+    let mut moments = moments_that_can_ask(&home, &scratch.path, &AccountSession::begin())
+        .ending_within(MUST_HAPPEN_WITHIN);
     moments.started_asking(&mut person);
     moments.ended();
     assert_eq!(ran(&marker), 0, "an unanswered hook fired at the end");
@@ -382,10 +404,19 @@ fn a_plugin_hook_on_session_ended_fires_only_one_already_answered_and_never_asks
     assert!(!home.join("hooks-approved").exists());
 
     // A yes recorded earlier: it fires, and still nothing is asked.
+    // The default bound is five seconds, which a script that a loaded machine starts late can
+    // outlast and be stopped before it writes, so the bound is the one a wait for something that
+    // must happen gets. What the end says about a hook that did not start or was stopped is
+    // checked first, so such a failure names its cause and not a marker that is absent.
     a_recorded_yes(&home, "session-ended");
-    let mut moments = moments_that_can_ask(&home, &scratch.path, &AccountSession::begin());
+    let mut moments = moments_that_can_ask(&home, &scratch.path, &AccountSession::begin())
+        .ending_within(MUST_HAPPEN_WITHIN);
     moments.started_asking(&mut person);
-    moments.ended();
+    let said = moments.ended();
+    assert!(
+        said.is_empty(),
+        "the hook did not run and end well: {said:?}"
+    );
     assert_eq!(ran(&marker), 1);
     assert!(person.asked.is_empty(), "the end asked a question");
 
@@ -416,22 +447,58 @@ fn watching_for_the_plugin(
     (watching, watched)
 }
 
-/// Put the watcher's questions to `confirmer` until `marker` holds `wanted` lines or two seconds
-/// pass, and answer whether it did.
+/// How long a wait for something that must happen gets. Long enough for a machine that is running
+/// many other builds, and left early the moment the thing happens, so a run that is not loaded
+/// does not wait for it.
+const MUST_HAPPEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a check that something does not happen watches for it. It ends in a pass, so it is
+/// kept short, and a loaded machine can only make it pass for a shorter time than intended and
+/// never fail.
+const MUST_NOT_HAPPEN_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Put the watcher's questions to `confirmer` until `done` holds of it or `within` passes, and
+/// answer whether `done` held.
 fn served_until<C: bravebot_agent::confirm::Confirmer>(
     watching: &bravebot_agent::hooks::Watching,
     confirmer: &mut C,
-    marker: &Path,
-    wanted: usize,
+    within: std::time::Duration,
+    done: impl Fn(&C) -> bool,
 ) -> bool {
-    for _ in 0..40 {
+    let deadline = std::time::Instant::now() + within;
+    loop {
         watching.serve(confirmer);
-        if ran(marker) >= wanted {
+        if done(confirmer) {
             return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    false
+}
+
+/// [`served_until`] `marker` holds `wanted` lines, and when it does not within
+/// [`MUST_HAPPEN_WITHIN`], a failure that says how many questions `person` was asked and what the
+/// watcher said about the hook. A hook that could not be started, or was stopped, leaves a marker
+/// that never appears, and the watcher's sentence is the only thing that tells it from a hook that
+/// was never run, and the questions from one never asked about.
+#[track_caller]
+fn served_until_ran(
+    watching: &bravebot_agent::hooks::Watching,
+    person: &mut AnswersHooks,
+    marker: &Path,
+    wanted: usize,
+    what: &str,
+) {
+    assert!(
+        served_until(watching, person, MUST_HAPPEN_WITHIN, |_| {
+            ran(marker) >= wanted
+        }),
+        "{what}: asked {:?}, the watcher said {:?}",
+        person.asked,
+        watching.said()
+    );
 }
 
 /// A state directory holding the plugin `demo`, whose one hook is on `file-changed` for the file
@@ -451,14 +518,12 @@ fn a_home_with_file_changed_entry(scratch: &Path, _name: &str) -> (PathBuf, Path
     )
     .expect("hooks");
     let script = source.join("hook.sh");
-    std::fs::write(
+    write_script(
         &script,
-        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
-    )
-    .expect("script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        &format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    );
     let home = scratch.join("state");
-    bravebot_agent::plugins::install(&source, &home).expect("install");
+    install_plugin(&source, &home);
     (home, marker)
 }
 
@@ -475,14 +540,16 @@ fn a_plugin_hook_on_file_changed_asks_then_fires() {
     let (watching, watched) = watching_for_the_plugin(&home, &scratch.path, &session);
     let mut person = AnswersHooks::new(Decision::Approve);
 
-    assert!(!served_until(&watching, &mut person, &marker, 1));
+    assert!(!served_until(
+        &watching,
+        &mut person,
+        MUST_NOT_HAPPEN_WITHIN,
+        |_| ran(&marker) >= 1
+    ));
     assert!(person.asked.is_empty(), "asked before any change");
 
     std::fs::write(&watched, "changed").expect("change it");
-    assert!(
-        served_until(&watching, &mut person, &marker, 1),
-        "never ran"
-    );
+    served_until_ran(&watching, &mut person, &marker, 1, "never ran");
     assert_eq!(person.asked.len(), 1, "{:?}", person.asked);
     assert_eq!(person.asked[0].plugin, "demo");
     assert_eq!(person.asked[0].moment, "file-changed");
@@ -505,10 +572,26 @@ fn a_no_at_file_changed_is_asked_once_and_again_in_a_later_session() {
     let mut refuses = AnswersHooks::new(Decision::Reject);
 
     std::fs::write(&watched, "changed").expect("change it");
-    assert!(!served_until(&watching, &mut refuses, &marker, 1));
+    assert!(
+        served_until(&watching, &mut refuses, MUST_HAPPEN_WITHIN, |person| {
+            !person.asked.is_empty()
+        }),
+        "the change was never asked about"
+    );
+    assert!(!served_until(
+        &watching,
+        &mut refuses,
+        MUST_NOT_HAPPEN_WITHIN,
+        |_| ran(&marker) >= 1
+    ));
     assert_eq!(refuses.asked.len(), 1);
     std::fs::write(&watched, "changed again").expect("change it again");
-    assert!(!served_until(&watching, &mut refuses, &marker, 1));
+    assert!(!served_until(
+        &watching,
+        &mut refuses,
+        MUST_NOT_HAPPEN_WITHIN,
+        |_| ran(&marker) >= 1
+    ));
     assert_eq!(
         refuses.asked.len(),
         1,
@@ -521,7 +604,13 @@ fn a_no_at_file_changed_is_asked_once_and_again_in_a_later_session() {
     let (watching, watched) = watching_for_the_plugin(&home, &scratch.path, &later);
     let mut agrees = AnswersHooks::new(Decision::Approve);
     std::fs::write(&watched, "changed in a later session").expect("change it");
-    assert!(served_until(&watching, &mut agrees, &marker, 1));
+    served_until_ran(
+        &watching,
+        &mut agrees,
+        &marker,
+        1,
+        "a later session's change never ran",
+    );
     assert_eq!(agrees.asked.len(), 1, "a later session was not asked");
     drop(watching);
 
@@ -561,24 +650,21 @@ fn a_changed_tree_stops_the_session_moments_and_file_changed() {
     )
     .expect("hooks");
     let script = source.join("hook.sh");
-    std::fs::write(
+    write_script(
         &script,
-        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
-    )
-    .expect("script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        &format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    );
     let home = scratch.path.join("state");
-    bravebot_agent::plugins::install(&source, &home).expect("install");
+    install_plugin(&source, &home);
     for moment in ["session-started", "session-ended", "file-changed"] {
         a_recorded_yes(&home, moment);
     }
 
     let installed = bravebot_agent::plugins::installed_dir(&home, "demo").join("hook.sh");
-    std::fs::write(
+    write_script(
         &installed,
-        format!("#!/bin/sh\necho edited >> '{}'\n", marker.display()),
-    )
-    .expect("edit");
+        &format!("#!/bin/sh\necho edited >> '{}'\n", marker.display()),
+    );
 
     let mut person = AnswersHooks::new(Decision::Approve);
     let session = AccountSession::begin();
@@ -588,6 +674,9 @@ fn a_changed_tree_stops_the_session_moments_and_file_changed() {
     let (watching, watched) = watching_for_the_plugin(&home, &scratch.path, &session);
     std::fs::write(&watched, "changed").expect("change it");
     let mut said = Vec::new();
+    // Waits up to two seconds for the watcher to say anything. What must not happen is a sentence
+    // naming the plugin again, so the bound ends a check that something does not happen and a
+    // later sentence is not waited for.
     for _ in 0..40 {
         watching.serve(&mut person);
         said.extend(watching.said());
@@ -642,14 +731,12 @@ fn a_plugin_entry_naming_a_file_outside_the_directory_is_not_watched() {
     )
     .expect("hooks");
     let script = source.join("hook.sh");
-    std::fs::write(
+    write_script(
         &script,
-        format!("#!/bin/sh\necho \"$1\" >> '{}'\n", marker.display()),
-    )
-    .expect("script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        &format!("#!/bin/sh\necho \"$1\" >> '{}'\n", marker.display()),
+    );
     let home = scratch.path.join("state");
-    bravebot_agent::plugins::install(&source, &home).expect("install");
+    install_plugin(&source, &home);
 
     let session = AccountSession::begin();
     let (watching, watched) = watching_for_the_plugin(&home, &checkout, &session);
@@ -657,7 +744,12 @@ fn a_plugin_entry_naming_a_file_outside_the_directory_is_not_watched() {
 
     std::fs::write(&outside, "changed, and longer").expect("change the absolute file");
     std::fs::write(&beside, "changed, and longer").expect("change the parent file");
-    assert!(!served_until(&watching, &mut person, &marker, 1));
+    assert!(!served_until(
+        &watching,
+        &mut person,
+        MUST_NOT_HAPPEN_WITHIN,
+        |_| ran(&marker) >= 1
+    ));
     assert!(
         person.asked.is_empty(),
         "a file outside the directory was watched: {:?}",
@@ -665,9 +757,12 @@ fn a_plugin_entry_naming_a_file_outside_the_directory_is_not_watched() {
     );
 
     std::fs::write(&watched, "changed").expect("change the relative file");
-    assert!(
-        served_until(&watching, &mut person, &marker, 1),
-        "the relative entry never ran"
+    served_until_ran(
+        &watching,
+        &mut person,
+        &marker,
+        1,
+        "the relative entry never ran",
     );
     assert_eq!(person.asked.len(), 1, "{:?}", person.asked);
     assert_eq!(person.asked[0].plugin, "demo");
@@ -736,14 +831,12 @@ fn after_an_update_every_hook_of_the_plugin_is_asked_about_again() {
     write_hooks("before");
     let marker = scratch.path.join("marker");
     let script = source.join("hook.sh");
-    std::fs::write(
+    write_script(
         &script,
-        format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
-    )
-    .expect("script");
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        &format!("#!/bin/sh\necho ran >> '{}'\n", marker.display()),
+    );
     let home = scratch.path.join("state");
-    bravebot_agent::plugins::install(&source, &home).expect("install");
+    install_plugin(&source, &home);
     for moment in ["turn-started", "turn-finished"] {
         a_recorded_yes(&home, moment);
     }
