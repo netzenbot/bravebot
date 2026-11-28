@@ -12,6 +12,8 @@
 //! Nothing here is written to disk. A goal lives as long as the session that set it.
 
 use crate::outcome::Work;
+use crate::repeat::Loops;
+use crate::turn::GoalHeld;
 
 /// The word that takes a goal off, rather than setting one called `clear`.
 const CLEAR: &str = "clear";
@@ -305,5 +307,59 @@ pub fn settle(
             *goal = None;
             Settled::Quarantined
         }
+    }
+}
+
+/// What starting a goal did to the loops a session held and to a goal already set (GOAL-11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Started {
+    /// Whether a goal was already set, paused or not, and the new one took its place.
+    pub replaced: bool,
+    /// The number of each loop the goal ended, oldest first. Empty where none was live.
+    pub loops_ended: Vec<usize>,
+}
+
+/// Set `new` as the session's goal, ending every live loop (GOAL-11).
+///
+/// A goal and a loop are never both running, and whichever was asked for second stands. A goal
+/// already set is replaced, paused or not. Each client says what ended in its own words: the
+/// terminal writes a note, and the desktop bridge sends `loop.ended` for each number and
+/// `goal.changed`.
+///
+/// Both arguments are the session's own state, and nothing a turn read is in either.
+pub fn start<C, N>(goal: &mut Option<Running>, loops: &mut Loops<C, N>, new: Running) -> Started {
+    let loops_ended = loops.iter().map(|running| running.number()).collect();
+    loops.stop_all();
+    let replaced = goal.replace(new).is_some();
+    Started {
+        replaced,
+        loops_ended,
+    }
+}
+
+/// Take the goal off because a person's `/loop` or `/after` is starting, and say whether there
+/// was one (GOAL-11).
+///
+/// Paused or not: a paused goal is not running, but it is still the session's goal. Called only
+/// where the loop does start, so a line that is refused leaves the goal as it was.
+pub fn taken_off_by_a_loop(goal: &mut Option<Running>) -> bool {
+    goal.take().is_some()
+}
+
+/// Whether a goal stands in the way of a loop a turn arranged by asking to look again (GOAL-11,
+/// LOOP-14).
+///
+/// A goal set or paused refuses it, since the person is the one who may replace a goal with a
+/// loop. Read when the turn ends and not when it began, so a goal set while the turn ran counts.
+pub fn refuses_a_turns_loop(goal: Option<&Running>) -> bool {
+    goal.is_some()
+}
+
+/// What the session holds of a goal, as [`crate::turn::LaterLook::for_line`] reads it.
+pub fn held(goal: Option<&Running>) -> GoalHeld {
+    match goal {
+        None => GoalHeld::None,
+        Some(running) if running.is_paused() => GoalHeld::Paused,
+        Some(_) => GoalHeld::InForce,
     }
 }

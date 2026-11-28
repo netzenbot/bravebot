@@ -4275,8 +4275,9 @@ impl Bridge {
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
         let asked = bravebot_agent::goal::parse(&argument);
+        let setting = matches!(asked, bravebot_agent::goal::Asked::Set(_));
         let mut watches_ended = 0;
-        if matches!(asked, bravebot_agent::goal::Asked::Set(_)) {
+        if setting {
             let mut watches = open
                 .watches
                 .lock()
@@ -4291,20 +4292,23 @@ impl Bridge {
             }
             watches.stop_all();
         }
-        // A goal ends the chat's loops too, each reported as ended by the goal (GOAL-11).
-        let mut loops_ended = 0;
-        if matches!(asked, bravebot_agent::goal::Asked::Set(_)) {
-            let mut loops = open
-                .loops
-                .lock()
-                .map_err(|_| Failure::bad_request("Loops unavailable."))?;
-            let numbers: Vec<usize> = loops.iter().map(|running| running.number()).collect();
-            loops.stop_all();
-            loops_ended = numbers.len();
-            for (name, data) in crate::loop_command::ended_by_a_goal(&numbers) {
-                self.emitter.send(Event::new(name, &handle, data));
-            }
-        }
+        // A goal ends the chat's loops too (GOAL-11): `bravebot_agent::goal::start`, which the
+        // terminal calls as well, does it, and each loop is reported below as ended by the goal.
+        // Taken before the goal slot, as `loop_command` takes them, and only where a goal is set.
+        let mut held_loops = if setting {
+            Some(
+                open.loops
+                    .lock()
+                    .map_err(|_| Failure::bad_request("Loops unavailable."))?,
+            )
+        } else {
+            None
+        };
+        let mut no_loops = bravebot_agent::repeat::Loops::default();
+        let loops = match held_loops.as_mut() {
+            Some(held) => &mut **held,
+            None => &mut no_loops,
+        };
         // A turn holds the state for its length, and the total until it ends is the one it began
         // with.
         let tokens = match open.state.try_lock() {
@@ -4321,8 +4325,11 @@ impl Bridge {
             tokens,
             open.running.is_some(),
             watches_ended,
-            loops_ended,
+            loops,
         );
+        for (name, data) in crate::loop_command::ended_by_a_goal(&answer.loops_ended) {
+            self.emitter.send(Event::new(name, &handle, data));
+        }
         let goal = crate::goal::snapshot(&slot, tokens, std::time::Instant::now());
         if answer.changed {
             self.emitter
@@ -5808,19 +5815,12 @@ fn later_look_of(
     watches: &Mutex<bravebot_agent::watch::Watches>,
 ) -> bravebot_agent::turn::LaterLook {
     use bravebot_agent::turn::{AboutTheLine, GoalHeld, LaterLook};
-    let paused = goal
-        .lock()
-        .ok()
-        .and_then(|slot| slot.running.as_ref().map(|running| running.is_paused()));
+    let held = goal.lock().ok().map_or(GoalHeld::None, |slot| slot.held());
     LaterLook::for_line(AboutTheLine {
         the_persons: typed_by_the_person,
         sent_again_after_a_wait,
         loop_live,
-        goal: match paused {
-            None => GoalHeld::None,
-            Some(false) => GoalHeld::InForce,
-            Some(true) => GoalHeld::Paused,
-        },
+        goal: held,
         watch_live: watches.lock().map_or(true, |live| !live.is_empty()),
     })
 }

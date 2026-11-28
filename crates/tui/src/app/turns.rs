@@ -1423,11 +1423,7 @@ pub(super) fn will_look_again(session: &Session, wrote: Wrote) -> turn::LaterLoo
         the_persons: wrote == Wrote::ThePerson && !session.driver_prompt_is_pending(),
         sent_again_after_a_wait: true,
         loop_live: session.looping().is_some(),
-        goal: match (session.goal(), session.goal_in_force()) {
-            (None, _) => turn::GoalHeld::None,
-            (Some(_), Some(_)) => turn::GoalHeld::InForce,
-            (Some(_), None) => turn::GoalHeld::Paused,
-        },
+        goal: bravebot_agent::goal::held(session.goal()),
         watch_live: !session.watches().is_empty(),
     })
 }

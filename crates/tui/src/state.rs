@@ -3575,7 +3575,7 @@ impl Session {
         }
         // The other half of the rule `start_goal` states: one thing at a time, whichever of the
         // two was asked for second.
-        if self.goal.take().is_some() {
+        if bravebot_agent::goal::taken_off_by_a_loop(&mut self.goal) {
             self.note(t!(loop_replaces_goal));
         }
         // A person typing `/loop` is present and means it, so their request stands and the
@@ -3843,23 +3843,25 @@ impl Session {
     /// anybody endorsed and nothing for a turn to be about: what a goal keeps going is whatever
     /// the person asks for next.
     pub fn start_goal(&mut self, condition: String) {
-        if self.goal.is_some() {
-            self.note(t!(goal_replaced));
-        }
+        let goal = crate::goals::Running::begin(
+            condition.clone(),
+            self.tokens + self.progress.tokens,
+            self.turn_in_flight,
+        );
         // One at a time. Both of these keep a session working without anybody typing, and a loop
         // whose ticks were each held open by a goal is neither of the two things a person asked
         // for: the interval stops meaning anything, and the condition is judged against a turn
-        // that was going to be repeated anyway.
-        if self.looping.stop_all() > 0 {
+        // that was going to be repeated anyway. The rule is `bravebot_agent::goal::start`, which
+        // the desktop bridge calls too.
+        let started = bravebot_agent::goal::start(&mut self.goal, &mut self.looping, goal);
+        if started.replaced {
+            self.note(t!(goal_replaced));
+        }
+        if !started.loops_ended.is_empty() {
             self.note(t!(goal_replaces_loop));
         }
         self.end_watches_for_another_kind();
         self.note(t!(goal_set, condition = &condition));
-        self.goal = Some(crate::goals::Running::begin(
-            condition,
-            self.tokens + self.progress.tokens,
-            self.turn_in_flight,
-        ));
     }
 
     /// Add what a turn did to the session's record (OPEN-1) and to the goal's, where a goal is set

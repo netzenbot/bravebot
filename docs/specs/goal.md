@@ -329,7 +329,9 @@ and says so, and a loop or watch a turn asks for is refused under it, as under a
 a goal ends every live loop and watch, each reported as ended by the goal, and says so in its
 answer. A turn under a goal, paused or not, arms neither a watch nor a loop, including a turn that
 began before the goal was set and ends under it. A `/loop` or `/after` that is refused leaves the
-goal as it was. This holds in the terminal and in the desktop app.
+goal as it was. This holds in the terminal and in the desktop app. Both call `goal::start`,
+`goal::taken_off_by_a_loop`, `goal::refuses_a_turns_loop` and `goal::held` of `bravebot_agent`, which
+own the transition, and say in their own words what ended.
 
 A goal check out to the judge when a person's `/loop` or `/after` replaces the goal is left to
 settle, so the chat takes no turn and the desktop sends no loop tick until it has. Its verdict is
@@ -340,6 +342,12 @@ was asked for: the interval stops meaning anything once a tick can be held open 
 and the condition is judged against a turn that was going to be repeated anyway.
 
 `verified-by: bravebot_tui::state::a_goal_and_a_loop_are_never_both_running`
+`verified-by: bravebot_agent::goal::starting_a_goal_ends_every_loop_and_names_each_by_its_number`
+`verified-by: bravebot_agent::goal::starting_a_goal_with_no_loop_live_ends_none`
+`verified-by: bravebot_agent::goal::starting_a_goal_replaces_one_already_set_paused_or_not`
+`verified-by: bravebot_agent::goal::a_loop_takes_the_goal_off_whether_or_not_it_is_paused`
+`verified-by: bravebot_agent::goal::a_goal_set_or_paused_refuses_a_loop_a_turn_arranged`
+`verified-by: bravebot_agent::goal::a_goal_is_held_as_none_in_force_or_paused`
 `verified-by: bravebot_ui_bridge::goal_tests::setting_a_goal_ends_the_watches`
 `verified-by: bravebot_ui_bridge::goal_tests::setting_a_goal_ends_every_loop_and_says_so`
 `verified-by: bravebot_ui_bridge::goal_tests::a_persons_loop_replaces_a_goal_paused_or_not_and_says_so`

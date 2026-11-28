@@ -23,7 +23,7 @@ impl Session {
     /// and a watch nobody typed is not a reason to drop it. A person's own `/loop` may replace a
     /// goal, since they are there to mean it.
     pub fn watch_again(&mut self, prompt: &str, wakeup: crate::loops::Wakeup) {
-        if self.goal.is_some() {
+        if bravebot_agent::goal::refuses_a_turns_loop(self.goal.as_ref()) {
             self.note(t!(loop_not_armed_under_a_goal));
             return;
         }
@@ -69,7 +69,7 @@ impl Session {
             self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
             return;
         }
-        if self.goal.take().is_some() {
+        if bravebot_agent::goal::taken_off_by_a_loop(&mut self.goal) {
             self.note(t!(loop_replaces_goal));
         }
         self.end_watches_for_another_kind();

@@ -15,6 +15,7 @@
 //! nothing that writes the session record can reach it (GOAL-12). Closing the chat drops it.
 
 use bravebot_agent::goal::{Asked, Running, Settled};
+use bravebot_agent::repeat::Loops;
 use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
 use serde_json::{Value, json};
@@ -60,7 +61,7 @@ impl GoalSlot {
 
     /// Whether a goal is set, paused or not. A turn under one starts no loop (GOAL-11).
     pub(crate) fn is_set(&self) -> bool {
-        self.running.is_some()
+        bravebot_agent::goal::refuses_a_turns_loop(self.running.as_ref())
     }
 
     /// A person's `/loop` or `/after` takes the goal off, paused or not, and any step it had
@@ -69,7 +70,13 @@ impl GoalSlot {
     pub(crate) fn replaced_by_a_loop(&mut self) -> bool {
         self.due = false;
         self.carry_on = None;
-        self.running.take().is_some()
+        bravebot_agent::goal::taken_off_by_a_loop(&mut self.running)
+    }
+
+    /// What the goal is for [`bravebot_agent::turn::LaterLook::for_line`]: none, in force or
+    /// paused.
+    pub(crate) fn held(&self) -> bravebot_agent::turn::GoalHeld {
+        bravebot_agent::goal::held(self.running.as_ref())
     }
 
     /// A turn is starting, such as for a prompt the person sent, which goes before any check or
@@ -288,25 +295,29 @@ fn said(settled: &Settled) -> Option<Said> {
 pub(crate) struct Answer {
     pub(crate) lines: Vec<String>,
     pub(crate) changed: bool,
+    /// The number of each loop a goal set by this command ended (GOAL-11), for `loop.ended`.
+    pub(crate) loops_ended: Vec<usize>,
 }
 
 /// Carry out `/goal` with what [`bravebot_agent::goal::parse`] read from its argument.
 ///
 /// `tokens` is the chat's token total now, which a goal set here counts its spend from.
 /// `mid_turn` says a turn is running, whose work the goal's record leaves out (GROUND-4).
-/// `watches_ended` and `loops_ended` are how many watches and loops the caller stopped before a
-/// goal is set (GOAL-11). Setting a goal sends nothing (GOAL-2).
+/// `watches_ended` is how many watches the caller stopped before a goal is set (GOAL-11). Setting
+/// a goal ends `loops` through [`bravebot_agent::goal::start`], the rule the terminal applies, and
+/// the answer carries the numbers that ended. Setting a goal sends nothing (GOAL-2).
 pub(crate) fn command(
     slot: &mut GoalSlot,
     asked: Asked,
     tokens: u64,
     mid_turn: bool,
     watches_ended: usize,
-    loops_ended: usize,
+    loops: &mut Loops,
 ) -> Answer {
     let unchanged = |line: String| Answer {
         lines: vec![line],
         changed: false,
+        loops_ended: Vec::new(),
     };
     match asked {
         Asked::Report => match slot.running.as_ref() {
@@ -320,24 +331,27 @@ pub(crate) fn command(
                     },
                 ],
                 changed: false,
+                loops_ended: Vec::new(),
             },
         },
         Asked::Set(condition) => {
+            let goal = Running::begin(condition.clone(), tokens, mid_turn);
+            let started = bravebot_agent::goal::start(&mut slot.running, loops, goal);
             let mut lines = Vec::new();
-            if slot.running.is_some() {
+            if started.replaced {
                 lines.push(t!(desktop_goal_replaced).to_string());
             }
             if watches_ended > 0 {
                 lines.push(t!(desktop_goal_replaces_watches).to_string());
             }
-            if loops_ended > 0 {
+            if !started.loops_ended.is_empty() {
                 lines.push(t!(desktop_goal_replaces_loops).to_string());
             }
             lines.push(t!(desktop_goal_set, condition = &condition).to_string());
-            slot.running = Some(Running::begin(condition, tokens, mid_turn));
             Answer {
                 lines,
                 changed: true,
+                loops_ended: started.loops_ended,
             }
         }
         Asked::Clear => match slot.running.take() {
@@ -345,6 +359,7 @@ pub(crate) fn command(
             Some(_) => Answer {
                 lines: vec![t!(desktop_goal_cleared).to_string()],
                 changed: true,
+                loops_ended: Vec::new(),
             },
         },
         Asked::Pause => match slot.running.as_mut().map(Running::pause) {
@@ -353,6 +368,7 @@ pub(crate) fn command(
             Some(true) => Answer {
                 lines: vec![t!(desktop_goal_paused).to_string()],
                 changed: true,
+                loops_ended: Vec::new(),
             },
         },
         Asked::Resume => match slot.running.as_mut().map(Running::resume) {
@@ -361,6 +377,7 @@ pub(crate) fn command(
             Some(true) => Answer {
                 lines: vec![t!(desktop_goal_resumed).to_string()],
                 changed: true,
+                loops_ended: Vec::new(),
             },
         },
     }

@@ -42,7 +42,10 @@ use crate::processor::Chat;
 
 mod standing;
 
-pub use standing::{Asked, MAX_IDLE_ROUNDS, MAX_ROUNDS, Next, Running, Settled, parse, settle};
+pub use standing::{
+    Asked, MAX_IDLE_ROUNDS, MAX_ROUNDS, Next, Running, Settled, Started, held, parse,
+    refuses_a_turns_loop, settle, start, taken_off_by_a_loop,
+};
 
 /// What the model is told it is doing.
 ///
@@ -353,6 +356,7 @@ pub fn assess<S: Sink>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::turn::GoalHeld;
 
     fn an_exchange() -> Conversation {
         let mut conversation = Conversation::new();
@@ -808,5 +812,126 @@ mod tests {
             assert_eq!(goal.as_ref().map(Running::rounds), Some(0));
             assert_eq!(goal.as_ref().and_then(Running::last_reason), None);
         }
+    }
+
+    fn a_loop_numbered(loops: &mut crate::repeat::Loops) -> usize {
+        let request = crate::repeat::parse("5m check the deploy")
+            .started()
+            .expect("an interval and a line start a loop");
+        loops.start(crate::repeat::Running::begin(request))
+    }
+
+    /// GOAL-11. Setting a goal ends every loop and names each by its number, not by its place in
+    /// the list or by how many there were. A wrong implementation reports the count, or the
+    /// positions, which differ from the numbers once a loop in the middle has ended.
+    #[test]
+    fn starting_a_goal_ends_every_loop_and_names_each_by_its_number() {
+        let mut loops = crate::repeat::Loops::default();
+        for _ in 0..3 {
+            a_loop_numbered(&mut loops);
+        }
+        assert!(loops.stop(2));
+        let mut goal = None;
+
+        let started = start(
+            &mut goal,
+            &mut loops,
+            Running::begin("done".into(), 0, false),
+        );
+
+        assert_eq!(
+            started,
+            Started {
+                replaced: false,
+                loops_ended: vec![1, 3],
+            }
+        );
+        assert!(loops.is_empty(), "a loop outlived the goal");
+        assert_eq!(goal.as_ref().map(Running::condition), Some("done"));
+    }
+
+    /// GOAL-11. A goal set where no loop is live ends nothing and says so. A wrong implementation
+    /// reports a loop ended whenever a goal is set.
+    #[test]
+    fn starting_a_goal_with_no_loop_live_ends_none() {
+        let mut loops: crate::repeat::Loops = crate::repeat::Loops::default();
+        let mut goal = None;
+
+        let started = start(
+            &mut goal,
+            &mut loops,
+            Running::begin("done".into(), 0, false),
+        );
+
+        assert!(started.loops_ended.is_empty());
+        assert!(!started.replaced);
+        assert!(goal.is_some());
+    }
+
+    /// GOAL-11. A goal already set is replaced whether or not it was paused, and the new one is
+    /// running. A wrong implementation reports a replacement only for a goal in force, or keeps
+    /// the paused flag of the goal it replaced.
+    #[test]
+    fn starting_a_goal_replaces_one_already_set_paused_or_not() {
+        for pause in [false, true] {
+            let mut loops: crate::repeat::Loops = crate::repeat::Loops::default();
+            let mut goal = a_goal();
+            if pause {
+                assert!(goal.as_mut().is_some_and(Running::pause));
+            }
+
+            let started = start(
+                &mut goal,
+                &mut loops,
+                Running::begin("a new condition".into(), 0, false),
+            );
+
+            assert!(started.replaced, "paused: {pause}");
+            assert_eq!(
+                goal.as_ref().map(Running::condition),
+                Some("a new condition")
+            );
+            assert_eq!(goal.as_ref().map(Running::is_paused), Some(false));
+        }
+    }
+
+    /// GOAL-11. A person's `/loop` takes the goal off, paused or not, and says whether there was
+    /// one. A wrong implementation leaves a paused goal standing or reports a goal that was never
+    /// there.
+    #[test]
+    fn a_loop_takes_the_goal_off_whether_or_not_it_is_paused() {
+        for pause in [false, true] {
+            let mut goal = a_goal();
+            if pause {
+                assert!(goal.as_mut().is_some_and(Running::pause));
+            }
+            assert!(taken_off_by_a_loop(&mut goal), "paused: {pause}");
+            assert!(goal.is_none(), "paused: {pause}");
+        }
+        let mut none = None;
+        assert!(!taken_off_by_a_loop(&mut none));
+    }
+
+    /// GOAL-11, LOOP-14. A goal set or paused stands in the way of a loop a turn arranged, and no
+    /// goal does not. A wrong implementation lets a turn start a loop under a paused goal.
+    #[test]
+    fn a_goal_set_or_paused_refuses_a_loop_a_turn_arranged() {
+        let mut goal = a_goal();
+        assert!(refuses_a_turns_loop(goal.as_ref()));
+        assert!(goal.as_mut().is_some_and(Running::pause));
+        assert!(refuses_a_turns_loop(goal.as_ref()));
+        assert!(!refuses_a_turns_loop(None));
+    }
+
+    /// What a session holds of a goal is read as none, in force or paused. A wrong implementation
+    /// reads a paused goal as in force, which tells a turn to work towards a condition nobody is
+    /// judging.
+    #[test]
+    fn a_goal_is_held_as_none_in_force_or_paused() {
+        let mut goal = a_goal();
+        assert_eq!(held(None), GoalHeld::None);
+        assert_eq!(held(goal.as_ref()), GoalHeld::InForce);
+        assert!(goal.as_mut().is_some_and(Running::pause));
+        assert_eq!(held(goal.as_ref()), GoalHeld::Paused);
     }
 }
