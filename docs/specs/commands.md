@@ -751,6 +751,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::tests::remainder::the_mcp_forms_that_start_or_change_a_server_wait_for_the_turn_in_flight`
 `verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_list_waits_behind_a_waiting_mcp_start_and_not_behind_a_waiting_prompt`
 `verified-by: bravebot_tui::app::tests::commands_mid_turn::status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated`
+`verified-by: bravebot_tui::app::tests::commands_mid_turn::a_status_report_reads_the_state_directory_of_its_profile_only`
 `verified-by: bravebot_tui::status::a_report_whose_rules_are_the_turns_states_neither_the_trust_nor_the_programs`
 `verified-by: bravebot_tui::app::tests::commands_behind_a_waiting_line::a_command_typed_during_a_compaction_waits`
 `verified-by: bravebot_tui::app::tests::commands_mid_turn::a_stopped_prompt_comes_back_after_a_command_answered_mid_turn`

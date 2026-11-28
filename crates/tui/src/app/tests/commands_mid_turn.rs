@@ -993,11 +993,17 @@ fn ctrl_enter_on_a_rename_mid_turn_hurries_nothing() {
 /// claim that would be false by the time it was read. The report also names an answer kept for
 /// the directory and the remembered lines, which it reads from the state directory, so the test
 /// runs in a profile of its own and the count of lines does not depend on whose machine it is.
+///
+/// `Beside::home` is not read by `/status`, so it is `None` here as in the other tests of the
+/// command. The state directory is the profile's, which `the_profiles_state_directory` checks, and
+/// `a_status_report_reads_the_state_directory_of_its_profile_only` plants the records a person's
+/// own directory would hold.
 #[test]
 fn status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated() {
     if !crate::test_profile::in_isolated_profile() {
         return;
     }
+    the_profiles_state_directory();
     let mut session = a_turn_running_on("first");
     let transcript = session.transcript.len();
     let root = std::path::Path::new("/work");
@@ -1052,6 +1058,183 @@ fn status_asked_mid_turn_answers_now_and_leaves_the_turns_rules_unstated() {
     );
     assert!(session.queued.is_empty(), "/status waited");
     assert_eq!(session.input(), "", "/status was left in the box");
+}
+
+/// `/status` reports the answer kept for the directory, the remembered lines and the `/reach`
+/// grants from the state directory of the profile the test runs in. The same records planted in
+/// two other directories a report could read by mistake, the profile directory itself and the
+/// project's own `.bravebot`, change nothing in the report, and planted in the profile's state
+/// directory they are the ones it lists.
+///
+/// The faults it rejects are a report that reads the profile directory or the project's `.bravebot`
+/// instead of `home::directory()`, and a report built from no state directory, which fails the
+/// second half. That the test's state directory is under its profile and not the person's own is
+/// checked by `the_profiles_state_directory`.
+#[test]
+#[expect(clippy::expect_used, reason = "a test fails by panicking")]
+#[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+fn a_status_report_reads_the_state_directory_of_its_profile_only() {
+    use bravebot_agent::reach::{Grant, Lifetime, Reached};
+    use bravebot_agent::trusted::Identity;
+    use bravebot_core::remembered::{RememberedArg, RememberedLine, RememberedStep, Shape};
+
+    if !crate::test_profile::in_isolated_profile() {
+        return;
+    }
+    let state = the_profiles_state_directory();
+    let root = crate::test_profile::project("bravebot-app-status-state-directory");
+    std::fs::create_dir_all(&root).expect("create");
+    let workspace = Workspace::new(&root).expect("a workspace");
+    let identity = Identity::of(workspace.root()).expect(
+        "the filesystem under the test scratch directory records when a directory was made",
+    );
+    let mut stored = bravebot_session::sessions::Handle::begin(
+        &root,
+        bravebot_session::sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    );
+    let config = a_config_needing_no_sign_in();
+    let mut session = a_turn_running_on("first");
+    let shown = |session: &Session, stored: &bravebot_session::sessions::Handle| {
+        status_report(session, stored, &workspace, None, &config, None)
+            .lines
+            .into_iter()
+            .map(|line| (line.label, line.value))
+            .collect::<Vec<_>>()
+    };
+    let line = RememberedLine {
+        steps: Shape::Pipeline(vec![RememberedStep {
+            program: "make".to_string(),
+            resolved: std::path::PathBuf::from("/usr/bin/make"),
+            started_as: std::path::PathBuf::from("/usr/bin/make"),
+            args: vec![RememberedArg::Literal("check".to_string())],
+            environment: Vec::new(),
+            routes: Vec::new(),
+        }]),
+    };
+    let granted = std::path::PathBuf::from("/data/reach-grant");
+    let grant = Grant {
+        binary: std::path::PathBuf::from("/usr/bin/make"),
+        operation: Some("check".to_string()),
+        reached: Reached::Directory(granted.clone()),
+        write: false,
+        allowed: "2026-01-02".to_string(),
+        lifetime: Lifetime::Always,
+        workspace: bravebot_agent::reach::Workspace::of(workspace.root()),
+    };
+    // Every record a person's own directory holds about this checkout, planted in `home`.
+    let plant = |home: &std::path::Path, id: &str| {
+        assert!(
+            bravebot_agent::trusted::Store::new(home, workspace.root())
+                .keep(&identity, id, 7, false),
+            "the answer was not kept"
+        );
+        bravebot_agent::remembered::Store::new(home, workspace.root()).remember(&line, id);
+        assert!(
+            bravebot_agent::reach::Store::new(home).allow(&grant),
+            "the grant was not written"
+        );
+    };
+    let kept_where = |home: &std::path::Path| {
+        t!(
+            status_directory_kept_where,
+            path = bravebot_agent::trusted::Store::new(home, workspace.root())
+                .path()
+                .display()
+        )
+    };
+    let remembered_where = |home: &std::path::Path| {
+        t!(
+            status_remembered_where,
+            path = bravebot_agent::remembered::Store::new(home, workspace.root())
+                .path()
+                .display()
+        )
+    };
+    let quiet = shown(&session, &stored);
+    let carried = |lines: &[(String, String)], home: &std::path::Path| {
+        let reached = lines.iter().any(|(label, value)| {
+            label == t!(status_reach) && *value == t!(count_reach_grants, count = 1)
+        });
+        [
+            lines.iter().any(|(_, shown)| *shown == kept_where(home)),
+            lines
+                .iter()
+                .any(|(_, shown)| *shown == remembered_where(home)),
+            reached,
+        ]
+    };
+    assert_eq!(
+        carried(&quiet, &state),
+        [false, false, false],
+        "a report of a directory with nothing kept lists a record: {quiet:?}"
+    );
+
+    // Directories a report could read by mistake: the profile itself, which the state directory
+    // sits in, and the `.bravebot` of the project the session is in.
+    let profile = bravebot_agent::home::profile().expect("a profile directory");
+    let wrong = [profile, root.join(bravebot_sandbox::base::STATE_DIRECTORY)];
+    for elsewhere in &wrong {
+        assert_ne!(
+            *elsewhere, state,
+            "a directory to plant in is the state directory"
+        );
+        plant(elsewhere, stored.id());
+    }
+    assert_eq!(
+        shown(&session, &stored),
+        quiet,
+        "the report changed for a record kept in a directory that is not the profile's state directory"
+    );
+
+    plant(&state, stored.id());
+    let planted = shown(&session, &stored);
+    assert_eq!(
+        carried(&planted, &state),
+        [true, true, true],
+        "the report did not list what the profile's state directory holds: {planted:?}"
+    );
+    for elsewhere in &wrong {
+        assert_eq!(
+            carried(&planted, elsewhere)[..2],
+            [false, false],
+            "the report names a path in a directory that is not the profile's state directory: {planted:?}"
+        );
+    }
+    let rows = bravebot_agent::reach::listed(&state, stored.id(), workspace.root());
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        planted.iter().any(|(_, value)| *value == rows[0]),
+        "the grant is not listed as /reach lists it: {planted:?}"
+    );
+    assert!(
+        planted.iter().any(|(label, _)| label == t!(status_reach)),
+        "no /reach heading: {planted:?}"
+    );
+
+    // The same report typed during a turn reads the same directory.
+    typed_during_a_turn(
+        &mut session,
+        STATUS_COMMAND,
+        key(KeyCode::Enter),
+        &mut Beside {
+            managed: &bravebot_config::Managed::default(),
+            settings: &bravebot_config::Settings::default(),
+            stored: &mut stored,
+            root: &root,
+            home: None,
+            workspace: &workspace,
+            scratch: None,
+            config: &mut a_config_needing_no_sign_in(),
+        },
+    );
+    let said = said_under_the_turn(&session).join("\n");
+    assert!(said.contains(&kept_where(&state)), "{said}");
+    assert!(said.contains(&remembered_where(&state)), "{said}");
+    for elsewhere in &wrong {
+        assert!(!said.contains(&kept_where(elsewhere)), "{said}");
+        assert!(!said.contains(&remembered_where(elsewhere)), "{said}");
+    }
 }
 
 /// `/forget-trust` mid-turn takes back the answer kept for the next session here as it is typed.

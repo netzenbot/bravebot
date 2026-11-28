@@ -11,6 +11,7 @@ fn the_status_of_a_session_lists_the_paths_programs_were_let_reach() {
     if !crate::test_profile::in_isolated_profile() {
         return;
     }
+    the_profiles_state_directory();
     let root = crate::test_profile::project("bravebot-app-status-requested-paths");
     std::fs::create_dir_all(&root).expect("create");
     let workspace = Workspace::new(&root).expect("a workspace");
@@ -103,6 +104,7 @@ fn a_path_the_person_lets_a_turn_reach_is_the_one_status_lists_afterwards() {
         return;
     }
     let top = crate::testutil::scratch_dir("bravebot-app-status-turn-path");
+    the_profiles_state_directory();
     std::fs::remove_dir_all(&top).ok();
     for place in [".ssh", ".bravebot", ".aws"] {
         std::fs::create_dir_all(top.join("home").join(place)).expect("home directory");

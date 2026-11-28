@@ -13,6 +13,7 @@ fn the_status_of_a_session_names_the_scope_of_a_level_chosen_with_effort_session
     if !crate::test_profile::in_isolated_profile() {
         return;
     }
+    the_profiles_state_directory();
     let root = crate::test_profile::project("bravebot-app-status-session-effort");
     std::fs::create_dir_all(&root).expect("create");
     let workspace = Workspace::new(&root).expect("a workspace");

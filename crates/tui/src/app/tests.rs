@@ -946,6 +946,27 @@ fn a_workspace() -> Workspace {
     Workspace::new(&directory).expect("workspace")
 }
 
+/// The state directory a `/status` report reads: `.bravebot` under the profile that
+/// `in_isolated_profile` made for this test, never the person's own.
+///
+/// `status_report` reads the kept answer, the remembered lines and the `/reach` grants from
+/// `home::directory()` and takes no directory as a parameter, and `Beside::home` does not reach it.
+/// What isolates a test that builds a report is therefore the environment of the process it runs in.
+/// `in_isolated_profile` points the profile variables at the profile and removes `BRAVEBOT_HOME`,
+/// which would otherwise answer before them. A test that builds a report calls this first, so a
+/// change to that isolation that leaves the state directory somewhere else fails at the start.
+fn the_profiles_state_directory() -> std::path::PathBuf {
+    let state = bravebot_agent::home::directory();
+    assert!(state.is_some(), "the test has no state directory");
+    assert_eq!(
+        state,
+        bravebot_agent::home::profile()
+            .map(|profile| profile.join(bravebot_sandbox::base::STATE_DIRECTORY)),
+        "the test's state directory is not under its profile, so it reads the person's own"
+    );
+    state.unwrap_or_default()
+}
+
 /// What a turn's loop holds beside the session, where a test reads none of it: a record that
 /// is never written, and no home to keep an answer in. A `/rename` through it still makes the
 /// store's directory for `/work`, so a test that renames runs in `in_isolated_profile`.

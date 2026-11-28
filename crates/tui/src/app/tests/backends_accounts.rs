@@ -40,6 +40,7 @@ fn the_status_of_a_chatgpt_session_names_the_level_it_sends() {
     if !crate::test_profile::in_isolated_profile() {
         return;
     }
+    the_profiles_state_directory();
     let root = crate::test_profile::project("bravebot-app-status-account");
     std::fs::create_dir_all(&root).expect("create");
     let workspace = Workspace::new(&root).expect("a workspace");
@@ -760,6 +761,7 @@ fn status_reports_the_tier_the_last_turn_ran_on_once_the_turn_is_folded_in() {
     if !crate::test_profile::in_isolated_profile() {
         return;
     }
+    the_profiles_state_directory();
     let root = crate::test_profile::project("bravebot-app-status-tier");
     std::fs::create_dir_all(&root).expect("create");
     let workspace = Workspace::new(&root).expect("a workspace");
