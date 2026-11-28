@@ -61,7 +61,7 @@ export interface LoopTick {
 export interface LoopEnded {
   number?: number
   count?: number
-  reason: 'finished' | 'silent' | 'sent' | 'stopped' | 'aged' | 'failed'
+  reason: 'finished' | 'silent' | 'sent' | 'stopped' | 'aged' | 'failed' | 'goal'
   message?: string
 }
 

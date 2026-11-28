@@ -943,6 +943,7 @@ fn ending(wakeup: Option<Wakeup>, looking_again: Option<&str>) -> crate::loop_co
         cancelled: false,
         looking_again: looking_again.map(str::to_string),
         watching: false,
+        goal_set: false,
     }
 }
 
@@ -1010,6 +1011,27 @@ fn a_typed_turn_that_asks_to_look_again_starts_an_armed_loop() {
     assert!(running.self_paced());
     assert_eq!(loops.next_due(now + Duration::from_secs(119)), None);
     assert_eq!(loops.next_due(now + Duration::from_secs(120)), Some(1));
+}
+
+/// GOAL-11, LOOP-14. Rejects a turn that asked to look again under a goal, paused or not, that
+/// still starts a loop, and a goal-set flag that blocks a turn with no goal.
+#[test]
+fn a_turn_that_asked_to_look_again_under_a_goal_starts_no_loop() {
+    let now = Instant::now();
+    let asked = Some(wakeup(120, false, false));
+    let mut under_a_goal = ending(asked, Some("tell me when ci passes"));
+    under_a_goal.goal_set = true;
+    let mut loops = Loops::default();
+    assert!(crate::loop_command::turn_ended(&mut loops, under_a_goal, now).is_empty());
+    assert!(loops.is_empty());
+
+    let mut loops = Loops::default();
+    let said = crate::loop_command::turn_ended(
+        &mut loops,
+        ending(asked, Some("tell me when ci passes")),
+        now,
+    );
+    assert_eq!(said.len(), 1);
 }
 
 /// LOOP-14, LOOP-11. Rejects a loop started from a line the person did not type, from a turn

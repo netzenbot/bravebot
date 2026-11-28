@@ -3778,6 +3778,12 @@ desktop-goal-replaced = L'objectif qui était fixé a été remplacé.
 desktop-goal-replaces-watches =
     Les surveillances en cours ont été arrêtées, car une discussion ne travaille qu'à une chose à
     la fois.
+desktop-goal-replaces-loops =
+    Toutes les boucles en cours ont été arrêtées, car une discussion ne travaille qu'à une chose à
+    la fois.
+desktop-loop-replaces-goal =
+    L'objectif qui était fixé a été retiré, car une discussion ne travaille qu'à une chose à la
+    fois.
 desktop-goal-cleared = L'objectif est retiré.
 desktop-goal-paused =
     L'objectif est suspendu. Les tours ne sont pas jugés par rapport à lui avant /goal resume, et

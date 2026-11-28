@@ -5058,6 +5058,11 @@ desktop-goal-replaced = The goal that was set has been replaced.
 desktop-goal-replaces-watches =
     The watches that were running have been stopped, because a chat works towards one thing at a
     time.
+desktop-goal-replaces-loops =
+    Every loop that was running has been stopped, because a chat works towards one thing at a
+    time.
+desktop-loop-replaces-goal =
+    The goal that was set has been cleared, because a chat works towards one thing at a time.
 desktop-goal-cleared = The goal is cleared.
 desktop-goal-paused =
     The goal is paused. Turns are not judged against it until /goal resume, and /goal clear still

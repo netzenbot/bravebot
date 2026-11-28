@@ -162,7 +162,9 @@ how often somebody wants to be told something, and telling them takes time too.
 
 A due tick is held while a turn is running and while anything the person queued is still waiting,
 and goes when both are done. A prompt the person typed in the middle of a loop is not a tick of
-it: it is not asked when the next tick is due, and its ending does not reset the clock.
+it: it is not asked when the next tick is due, and its ending does not reset the clock. The desktop
+holds a due tick as well while a goal check is out to the judge, and sends it once the check has
+settled ([GOAL-11](goal.md#GOAL-11)).
 
 **Why.** A schedule is a request to be asked again, not a licence to interrupt. The person is
 still the one using this session.
@@ -175,6 +177,7 @@ still the one using this session.
 `verified-by: bravebot_ui_bridge::loop_command_tests::nothing_fires_while_the_session_is_busy`
 `verified-by: bravebot_ui_bridge::loop_command_tests::nothing_fires_while_the_window_holds_a_queue`
 `verified-by: bravebot_ui_bridge::loop_command_tests::a_typed_turn_between_ticks_leaves_the_loops_alone`
+`verified-by: bravebot_ui_bridge::goal_tests::a_goal_check_out_when_after_replaces_the_goal_neither_ends_nor_starts_a_loop`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-command.test.mjs holds a start the bridge refuses while a turn runs to waiting in the window's queue and being asked again from it, and make check-ui runs it)`
 
 <a id="LOOP-7"></a>
@@ -271,9 +274,9 @@ never has and tells the user it is missing. Both were observed before this claus
 | age | seven days after it started, counted for each loop from its own start |
 
 **On the desktop.** The window's Stop is the interrupt and the stopped turn at once: it cancels the
-turn in flight and ends every loop. The desktop has no goal and no `/clear`, so the goal clause has
-nothing to attach to there, and the session moves on by being closed, which ends every loop. A new
-chat is a session of its own and leaves the loops of the one before it running.
+turn in flight and ends every loop. The desktop has no `/clear`, and the session moves on by being
+closed, which ends every loop. A new chat is a session of its own and leaves the loops of the one
+before it running.
 
 **Why a key ends all of them.** Ctrl-C and a cancelled turn mean "stop what is happening", and a
 key that left some loops running would send the next prompt as though nothing had been said. Ending
@@ -326,6 +329,7 @@ arriving after its loop has gone would otherwise start a new loop on the line ju
 `verified-by: bravebot_ui_bridge::loop_command_tests::a_tick_that_says_it_is_finished_ends_the_loop`
 `verified-by: bravebot_ui_bridge::loop_command_tests::a_loop_ends_after_seven_days`
 `verified-by: bravebot_ui_bridge::loop_command_tests::only_a_line_offered_a_later_look_starts_a_loop`
+`verified-by: bravebot_ui_bridge::goal_tests::setting_a_goal_ends_every_loop_and_says_so`
 `verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/loop-command.test.mjs holds an ending to saying which loop ended or how many a stop ended, and a /loop stop typed behind a waiting /loop line to waiting behind it, and make check-ui runs it)`
 
 <a id="LOOP-12"></a>
@@ -429,10 +433,6 @@ and the turn chooses only when it is sent again.
 there is nowhere for a turn to give one. What it gives is the wait until the next look, and it is
 asked again then, which is exactly what [LOOP-9](#LOOP-9) already bounds.
 
-**On the desktop.** The desktop has no goal, so it writes no goal sentence and there is no goal for
-a loop to get past: the two goal rows above have nothing to attach to there, and every other row
-holds as written.
-
 `verified-by: bravebot_tui::app::tests::loops_and_goals::only_a_line_the_person_wrote_becomes_a_watch_the_turn_asked_for`
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_sends_nothing_until_the_wait_is_up`
 `verified-by: bravebot_tui::state::a_watch_a_turn_arranged_does_not_replace_a_goal`
@@ -440,6 +440,9 @@ holds as written.
 `verified-by: bravebot_tui::loops::a_loop_a_turn_asked_for_is_paced_by_the_turns`
 `verified-by: bravebot_ui_bridge::loop_command_tests::a_typed_turn_that_asks_to_look_again_starts_an_armed_loop`
 `verified-by: bravebot_ui_bridge::loop_command_tests::only_a_line_offered_a_later_look_starts_a_loop`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_turn_that_asked_to_look_again_under_a_goal_starts_no_loop`
+`verified-by: bravebot_ui_bridge::goal_tests::a_turn_under_a_goal_starts_no_loop_even_when_the_goal_was_set_while_it_ran`
+`verified-by: bravebot_ui_bridge::goal_tests::a_line_typed_under_a_goal_or_a_watch_is_told_which_one_takes_the_next_look`
 
 ## What the argument may be
 

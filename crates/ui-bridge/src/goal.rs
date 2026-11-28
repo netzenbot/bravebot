@@ -58,6 +58,20 @@ impl GoalSlot {
             .map(|running| running.condition().to_string())
     }
 
+    /// Whether a goal is set, paused or not. A turn under one starts no loop (GOAL-11).
+    pub(crate) fn is_set(&self) -> bool {
+        self.running.is_some()
+    }
+
+    /// A person's `/loop` or `/after` takes the goal off, paused or not, and any step it had
+    /// waiting, and says whether there was one (GOAL-11). A check out to the judge is left to
+    /// settle: its verdict is for a goal that is gone, so it is neither acted on nor reported.
+    pub(crate) fn replaced_by_a_loop(&mut self) -> bool {
+        self.due = false;
+        self.carry_on = None;
+        self.running.take().is_some()
+    }
+
     /// A turn is starting, such as for a prompt the person sent, which goes before any check or
     /// carry-on that was waiting. Its own end makes the check due again.
     pub(crate) fn turn_starting(&mut self) {
@@ -280,14 +294,15 @@ pub(crate) struct Answer {
 ///
 /// `tokens` is the chat's token total now, which a goal set here counts its spend from.
 /// `mid_turn` says a turn is running, whose work the goal's record leaves out (GROUND-4).
-/// `watches_ended` is how many watches the caller stopped before a goal is set (GOAL-11). Setting a
-/// goal sends nothing (GOAL-2).
+/// `watches_ended` and `loops_ended` are how many watches and loops the caller stopped before a
+/// goal is set (GOAL-11). Setting a goal sends nothing (GOAL-2).
 pub(crate) fn command(
     slot: &mut GoalSlot,
     asked: Asked,
     tokens: u64,
     mid_turn: bool,
     watches_ended: usize,
+    loops_ended: usize,
 ) -> Answer {
     let unchanged = |line: String| Answer {
         lines: vec![line],
@@ -314,6 +329,9 @@ pub(crate) fn command(
             }
             if watches_ended > 0 {
                 lines.push(t!(desktop_goal_replaces_watches).to_string());
+            }
+            if loops_ended > 0 {
+                lines.push(t!(desktop_goal_replaces_loops).to_string());
             }
             lines.push(t!(desktop_goal_set, condition = &condition).to_string());
             slot.running = Some(Running::begin(condition, tokens, mid_turn));

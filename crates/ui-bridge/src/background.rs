@@ -10,9 +10,10 @@
 //! The decision is [`bravebot_session::jobs::refusal`], the one the terminal's `/bg` makes, read
 //! from what the bridge holds about an open chat; only the sentences are the bridge's. The
 //! terminal's refusal for a command-line option the background session would lose has no
-//! counterpart, because a window has no command line. A chat has no loop, so its watches and its
-//! goal, paused or not, are what it keeps running, and either refuses the hand-over. A question beside the work (an enhancement or a handoff brief) is
-//! refused as something running, since the chat would close under it.
+//! counterpart, because a window has no command line. The refusal for work the background
+//! session would not run counts a chat's watches and its goal, paused or not, and not its loops,
+//! which the terminal's refusal counts. A question beside the work (an enhancement or a handoff
+//! brief) is refused as something running, since the chat would close under it.
 //!
 //! The listed rows are the ones the terminal list draws (BG-16), from [`listing::roster_rows`], in
 //! the order of [`listing::ROSTER_ORDER`] and most recent first within a state. Listing attaches

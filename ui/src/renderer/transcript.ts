@@ -481,6 +481,7 @@ const ENDED: Record<LoopEnded['reason'], string> = {
   stopped: 'stopped',
   aged: 'it was seven days old',
   failed: 'its tick could not be sent',
+  goal: 'a goal was set',
 }
 /**
  * That a loop ended, with its number, or how many a stop ended (LOOP-11), or null for a line

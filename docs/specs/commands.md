@@ -1109,8 +1109,8 @@ lets go once none has, when the setting goes off, when the window closes and whe
 The first time it is turned on a dialog says the same as the first `/caffeinate`, and nothing is
 held until the person presses Enable. Enable writes `confirmed` to `~/.bravebot/caffeinate`, the
 file the first `/caffeinate` writes, and the dialog is not shown where that file already says so,
-so agreeing in the terminal or the window is agreeing in both. The window runs no loop, and a
-watch holds nothing.
+so agreeing in the terminal or the window is agreeing in both. The window holds nothing between a
+loop's ticks, and a watch holds nothing.
 
 **Why.** A laptop that sleeps during a long turn, a loop or a `schedule_next` wait stops the request
 in flight and the programs the turn runs, and the person comes back to a stalled session or a failed

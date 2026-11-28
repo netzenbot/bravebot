@@ -2947,7 +2947,9 @@ impl Bridge {
             sandbox: self.sandbox_mode_in(&open.project, open.sandbox),
             settled: self.sandbox_mode_in(&open.project, None),
             busy,
-            // A chat has no loop, so its watches and its goal are all it could keep running.
+            // Only watches and a goal are counted. A chat can also hold loops, which the
+            // terminal counts here and this does not, so a chat with a live loop is handed over
+            // and its loops end with it.
             keeps_running: watching || under_a_goal,
             recorded: left.is_some(),
             incognito: bravebot_core::incognito::engaged(),
@@ -4259,8 +4261,8 @@ impl Bridge {
     }
 
     /// `/goal` typed in the window (CMD-1). Setting a goal sends nothing (GOAL-2) and ends the
-    /// chat's watches, which are its other unattended work (GOAL-11). Every change is sent as
-    /// `goal.changed`.
+    /// chat's watches and loops, which are its other unattended work (GOAL-11). Every change is
+    /// sent as `goal.changed`.
     fn goal_command(&mut self, request: &Request) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         self.reap(&handle);
@@ -4289,6 +4291,20 @@ impl Bridge {
             }
             watches.stop_all();
         }
+        // A goal ends the chat's loops too, each reported as ended by the goal (GOAL-11).
+        let mut loops_ended = 0;
+        if matches!(asked, bravebot_agent::goal::Asked::Set(_)) {
+            let mut loops = open
+                .loops
+                .lock()
+                .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+            let numbers: Vec<usize> = loops.iter().map(|running| running.number()).collect();
+            loops.stop_all();
+            loops_ended = numbers.len();
+            for (name, data) in crate::loop_command::ended_by_a_goal(&numbers) {
+                self.emitter.send(Event::new(name, &handle, data));
+            }
+        }
         // A turn holds the state for its length, and the total until it ends is the one it began
         // with.
         let tokens = match open.state.try_lock() {
@@ -4305,6 +4321,7 @@ impl Bridge {
             tokens,
             open.running.is_some(),
             watches_ended,
+            loops_ended,
         );
         let goal = crate::goal::snapshot(&slot, tokens, std::time::Instant::now());
         if answer.changed {
@@ -4474,19 +4491,34 @@ impl Bridge {
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        let (answer, started) = {
+        // Read before the goal slot is taken: it reads the slot itself, and a lock held across it
+        // would never be released.
+        let (turn_running, ready) = (open.running.is_some(), open.ready_for_work());
+        let (answer, started, replaced_goal) = {
             let mut loops = open
                 .loops
                 .lock()
                 .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+            let mut goal = open
+                .goal
+                .lock()
+                .map_err(|_| Failure::bad_request("Goal unavailable."))?;
             crate::loop_command::command(
                 &argument,
                 &mut loops,
-                open.running.is_some(),
-                open.ready_for_work(),
+                &mut goal,
+                turn_running,
+                ready,
                 std::time::Instant::now(),
             )?
         };
+        if replaced_goal {
+            self.emitter.send(Event::new(
+                "goal.changed",
+                &handle,
+                json!({ "goal": Value::Null }),
+            ));
+        }
         // The first tick goes at once rather than an interval later (LOOP-4).
         if let Some(number) = started {
             self.fire_loop(&handle, number);
@@ -4507,15 +4539,25 @@ impl Bridge {
             .open
             .get(&handle)
             .ok_or_else(Failure::no_such_session)?;
-        let mut loops = open
-            .loops
-            .lock()
-            .map_err(|_| Failure::bad_request("Loops unavailable."))?;
-        Ok(crate::loop_command::after(
-            &argument,
-            &mut loops,
-            std::time::Instant::now(),
-        ))
+        let (answer, replaced_goal) = {
+            let mut loops = open
+                .loops
+                .lock()
+                .map_err(|_| Failure::bad_request("Loops unavailable."))?;
+            let mut goal = open
+                .goal
+                .lock()
+                .map_err(|_| Failure::bad_request("Goal unavailable."))?;
+            crate::loop_command::after(&argument, &mut loops, &mut goal, std::time::Instant::now())
+        };
+        if replaced_goal {
+            self.emitter.send(Event::new(
+                "goal.changed",
+                &handle,
+                json!({ "goal": Value::Null }),
+            ));
+        }
+        Ok(answer)
     }
 
     /// Called by the desktop's clock: send the tick of every idle session's loop that is due.
@@ -4541,10 +4583,11 @@ impl Bridge {
     /// The loop clock, read at `now`.
     ///
     /// A session is passed over while a turn runs, while it is being compacted, before its trust
-    /// question is answered, while a question about its settings waits, while a worker still
-    /// holds its state, and while it is in `held`, the sessions the main process says have lines
-    /// queued in the window: a tick waits for an idle session and never interrupts (LOOP-6). Loops
-    /// past their age end first, whether or not the session is idle (LOOP-11).
+    /// question is answered, while a question about its settings waits, while a goal's check is out
+    /// to the judge (a tick sent then is refused and would end its loop as failed), while a worker
+    /// still holds its state, and while it is in `held`, the sessions the main process says have
+    /// lines queued in the window: a tick waits for an idle session and never interrupts (LOOP-6).
+    /// Loops past their age end first, whether or not the session is idle (LOOP-11).
     fn poll_loops_holding(&mut self, now: std::time::Instant, held: &[String]) {
         let handles: Vec<_> = self.open.keys().cloned().collect();
         for handle in handles {
@@ -4572,6 +4615,7 @@ impl Bridge {
                 || open.compacting.is_some()
                 || !open.answered_trust
                 || open.questions.reply_method().is_some()
+                || open.goal.lock().map_or(true, |slot| slot.is_judging())
                 || held.contains(&handle)
             {
                 continue;
@@ -6146,6 +6190,7 @@ fn work(work: Work) {
                         cancelled: false,
                         looking_again: later_look.this_turn_arranges().then(|| prompt.clone()),
                         watching,
+                        goal_set: goal.lock().map_or(true, |slot| slot.is_set()),
                     },
                     std::time::Instant::now(),
                 );
@@ -6253,6 +6298,7 @@ fn work(work: Work) {
                         cancelled: cancel.is_cancelled(),
                         looking_again: None,
                         watching: false,
+                        goal_set: false,
                     },
                     std::time::Instant::now(),
                 );

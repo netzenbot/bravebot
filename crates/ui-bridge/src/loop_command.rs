@@ -9,6 +9,7 @@
 //! line is whatever somebody typed, so each is pictured with
 //! [`bravebot_agent::confirm::printable`] before it is answered.
 
+use crate::goal::GoalSlot;
 use crate::protocol::{ErrorCode, Failure};
 use bravebot_agent::repeat::{
     self, Asked, Delayed, Ending, Held, Loops, Pacing, Running, Stopped, TickEnd,
@@ -28,20 +29,25 @@ use std::time::Instant;
 /// turn in flight running (LOOP-11).
 ///
 /// Answers with the number of the loop it started, where it started one, so the caller sends that
-/// loop's first tick at once (LOOP-4).
+/// loop's first tick at once (LOOP-4), and whether the start took a goal off, so the caller sends
+/// `goal.changed` (GOAL-11). The goal is taken off only where the loop starts: a start refused for
+/// a turn in flight, a full set, an unreadable argument or a session that could not start a turn
+/// leaves it as it was.
 pub fn command(
     argument: &str,
     loops: &mut Loops,
+    goal: &mut GoalSlot,
     turn_running: bool,
     ready: Result<(), Failure>,
     now: Instant,
-) -> Result<(Value, Option<usize>), Failure> {
+) -> Result<(Value, Option<usize>, bool), Failure> {
     match repeat::parse(argument) {
-        Asked::Report => Ok((report(loops, now), None)),
-        Asked::Stop(which) => Ok((stop(loops, which), None)),
+        Asked::Report => Ok((report(loops, now), None, false)),
+        Asked::Stop(which) => Ok((stop(loops, which), None, false)),
         Asked::Unreadable => Ok((
             said(&[t!(desktop_loop_needs_a_prompt).to_string()], true),
             None,
+            false,
         )),
         Asked::Start(request) => {
             if turn_running {
@@ -57,10 +63,13 @@ pub fn command(
                 return Ok((
                     said(&[t!(desktop_loop_full, count = repeat::MAX_LIVE)], true),
                     None,
+                    false,
                 ));
             }
-            let (answer, number) = start(loops, request);
-            Ok((answer, Some(number)))
+            // A person's `/loop` replaces a goal, paused or not (GOAL-11).
+            let replaced = goal.replaced_by_a_loop();
+            let (answer, number) = start(loops, request, replaced);
+            Ok((answer, Some(number), replaced))
         }
     }
 }
@@ -72,17 +81,35 @@ pub fn command(
 /// clock sends it. So unlike `/loop` it is taken while a turn runs, and the delay counts from
 /// `now`, when the person typed it. The clock sends the tick only to a session that can start a
 /// turn, so nothing here asks whether this one can yet.
-pub fn after(argument: &str, loops: &mut Loops, now: Instant) -> Value {
+///
+/// Answers with whether the line took a goal off, as [`command`] does. A line that is refused
+/// leaves the goal as it was.
+pub fn after(
+    argument: &str,
+    loops: &mut Loops,
+    goal: &mut GoalSlot,
+    now: Instant,
+) -> (Value, bool) {
     let request = match repeat::parse_after(argument) {
         Delayed::Start(request) => request,
         Delayed::Unreadable => {
-            return said(&[t!(desktop_after_needs_a_delay).to_string()], true);
+            return (
+                said(&[t!(desktop_after_needs_a_delay).to_string()], true),
+                false,
+            );
         }
     };
     if loops.is_full() {
-        return said(&[t!(desktop_loop_full, count = repeat::MAX_LIVE)], true);
+        return (
+            said(&[t!(desktop_loop_full, count = repeat::MAX_LIVE)], true),
+            false,
+        );
     }
+    let replaced = goal.replaced_by_a_loop();
     let mut lines = Vec::new();
+    if replaced {
+        lines.push(t!(desktop_loop_replaces_goal).to_string());
+    }
     let held = match request.adjusted {
         Some(Held::Raised(delay)) => {
             lines.push(t!(desktop_after_delay_raised, delay = repeat::spell(delay)));
@@ -112,7 +139,7 @@ pub fn after(argument: &str, loops: &mut Loops, now: Instant) -> Value {
     answer["number"] = json!(number);
     answer["pace"] = json!(pace);
     answer["adjusted"] = held;
-    answer
+    (answer, replaced)
 }
 
 /// How a turn ended, as far as the session's loops need to know.
@@ -127,6 +154,9 @@ pub struct TurnEnd {
     /// Whether a standing watch is live once the turn's own watches are armed. A session does one
     /// of a watch and a loop at a time, and a turn that asked for both meant the watch.
     pub watching: bool,
+    /// Whether a goal is set, paused or not, read when the turn ends and not when it began: a goal
+    /// set while the turn ran is as much in the way as one set before it (GOAL-11).
+    pub goal_set: bool,
 }
 
 /// Arm the next tick from the turn that has just ended, and give back the events that say what
@@ -153,9 +183,9 @@ pub fn turn_ended(loops: &mut Loops, end: TurnEnd, now: Instant) -> Vec<(&'stati
         TickEnd::NotATick => {}
     }
     // A turn that asked to look again while nothing loops starts a loop over the person's line,
-    // with its first tick the wait away (LOOP-14).
+    // with its first tick the wait away (LOOP-14). Under a goal, paused or not, it starts none.
     match (end.looking_again, end.wakeup) {
-        (Some(line), Some(wakeup)) if !end.watching => loops
+        (Some(line), Some(wakeup)) if !end.watching && !end.goal_set => loops
             .try_start(Running::armed(line, wakeup, now))
             .map(|number| {
                 vec![(
@@ -177,12 +207,23 @@ pub fn stopped(count: usize) -> Vec<(&'static str, Value)> {
     }
 }
 
+/// The events that say a goal ended each loop, one per loop with its number (GOAL-11, LOOP-11).
+pub fn ended_by_a_goal(numbers: &[usize]) -> Vec<(&'static str, Value)> {
+    numbers
+        .iter()
+        .map(|number| ("loop.ended", json!({"number": number, "reason": "goal"})))
+        .collect()
+}
+
 /// Record a loop and say what it is. Numbered before anything is said, so the answer names the
 /// number `/loop stop` takes.
-fn start(loops: &mut Loops, request: repeat::Request) -> (Value, usize) {
+fn start(loops: &mut Loops, request: repeat::Request, replaced_goal: bool) -> (Value, usize) {
     let (adjusted, pacing) = (request.adjusted, request.pacing);
     let number = loops.start(Running::begin(request));
     let mut lines = Vec::new();
+    if replaced_goal {
+        lines.push(t!(desktop_loop_replaces_goal).to_string());
+    }
     // Said before the start, so a person who typed `1s` reads what the interval became (LOOP-7).
     let held = match adjusted {
         Some(Held::Raised(every)) => {

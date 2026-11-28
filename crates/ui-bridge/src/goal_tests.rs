@@ -281,6 +281,12 @@ enum Answers {
     Refuse,
     /// Every request is answered after a few seconds, so a cancel arrives first.
     Slowly,
+    /// The first request of a turn asks, with `schedule_next`, to be asked again in a minute, and
+    /// the one after its result ends the turn.
+    Look,
+    /// As `Look`, with the first request answered after a couple of seconds, so a person can type
+    /// while the turn is still running.
+    LookSlowly,
 }
 
 /// The bodies of the planner's requests a [`service`] received, in order.
@@ -339,19 +345,33 @@ fn service_judging(answers: Answers, judge: Judge) -> (u16, Bodies) {
                 continue;
             }
             let judging = request["messages"].is_array() && request.get("tools").is_none();
-            if (judging && judge == Judge::Slowly) || (!judging && answers == Answers::Slowly) {
-                std::thread::sleep(Duration::from_secs(3));
-            }
             let answered = request["messages"]
                 .as_array()
                 .and_then(|messages| messages.last())
                 .is_some_and(|last| last["role"] == "tool");
+            if (judging && judge == Judge::Slowly)
+                || (!judging && answers == Answers::Slowly)
+                || (!judging && !answered && answers == Answers::LookSlowly)
+            {
+                std::thread::sleep(if answers == Answers::LookSlowly {
+                    Duration::from_secs(2)
+                } else {
+                    Duration::from_secs(3)
+                });
+            }
             let (delta, finish) = if judging {
                 let verdict = match judge {
                     Judge::Says(text) => text,
                     Judge::Slowly => "MET",
                 };
                 (json!({"role": "assistant", "content": verdict}), "stop")
+            } else if matches!(answers, Answers::Look | Answers::LookSlowly) && !answered {
+                (
+                    json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "s1",
+                        "type": "function", "function": {"name": "schedule_next",
+                        "arguments": json!({"delay_seconds": 60, "noop": false}).to_string()}}]}),
+                    "tool_calls",
+                )
             } else if answers == Answers::Watch && !answered {
                 (
                     json!({"role": "assistant", "tool_calls": [{"index": 0, "id": "w1",
@@ -431,6 +451,28 @@ fn served_judging(answers: Answers, judge: Judge) -> Served {
 }
 
 impl Served {
+    /// A `method` call on the bridge, as the window sends it.
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+        let request = Request {
+            id: 5,
+            method: method.to_string(),
+            params,
+        };
+        self.bridge.dispatch(&request)
+    }
+
+    /// The numbers of the loops the chat holds, in the order `loops.list` gives them.
+    fn loop_numbers(&mut self) -> Vec<u64> {
+        let handle = self.handle.clone();
+        let listed = self.call("loops.list", json!({"session": handle})).unwrap();
+        listed["loops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["number"].as_u64().unwrap())
+            .collect()
+    }
+
     /// `/goal <argument>` typed in the chat.
     fn goal(&mut self, argument: &str) -> Value {
         let handle = self.handle.clone();
@@ -995,4 +1037,368 @@ fn a_prompt_the_person_sends_goes_before_the_check() {
     chat.settled();
     let bodies = chat.bodies.lock().unwrap().clone();
     assert!(bodies[2].contains("and then this"));
+}
+
+/// A `/loop` typed in the chat, as the window sends it.
+fn typed_loop(chat: &mut Served, argument: &str) -> Value {
+    let session = chat.handle.clone();
+    chat.call(
+        "loop.command",
+        json!({"session": session, "argument": argument}),
+    )
+    .unwrap()
+}
+
+/// A `/after` typed in the chat, as the window sends it.
+fn typed_after(chat: &mut Served, argument: &str) -> Value {
+    let session = chat.handle.clone();
+    chat.call(
+        "after.command",
+        json!({"session": session, "argument": argument}),
+    )
+    .unwrap()
+}
+
+/// GOAL-11, LOOP-11: setting a goal ends every loop the chat holds, says each ended with its
+/// number and the reason `goal`, says so in its answer, and leaves nothing for the loop clock to
+/// send. A bare `/goal`, `/goal pause` and `/goal clear` end none, and a goal set where no loop is
+/// live does not say loops were stopped. The regressions it rejects: a goal set beside loops that
+/// go on sending their tick and the goal's carry-on, a goal that ends the loops silently, one that
+/// ends them on any `/goal` word, and an answer that always says loops were stopped.
+#[test]
+fn setting_a_goal_ends_every_loop_and_says_so() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let mut chat = served(Answers::Done);
+    for (turns, line) in ["5m one", "5m two"].iter().enumerate() {
+        assert_eq!(typed_loop(&mut chat, line)["refused"], false);
+        chat.ended(turns + 1);
+    }
+    assert_eq!(chat.loop_numbers(), [1, 2]);
+
+    // None of these ends a loop: no goal is set yet, and a pause or a clear of nothing sets none.
+    for argument in ["", "pause", "resume", "clear"] {
+        chat.goal(argument);
+    }
+    assert_eq!(chat.loop_numbers(), [1, 2]);
+    assert!(chat.named("loop.ended").is_empty());
+
+    let answer = chat.goal("a.txt says two");
+
+    assert!(chat.loop_numbers().is_empty());
+    let ended: Vec<Value> = chat
+        .named("loop.ended")
+        .into_iter()
+        .map(|event| event.data)
+        .collect();
+    assert_eq!(
+        ended,
+        [
+            json!({"number": 1, "reason": "goal"}),
+            json!({"number": 2, "reason": "goal"})
+        ]
+    );
+    let lines = answer["lines"].as_array().unwrap();
+    assert!(
+        lines.contains(&json!(t!(desktop_goal_replaces_loops).to_string())),
+        "{answer}"
+    );
+    assert_eq!(answer["goal"]["condition"], "a.txt says two");
+    // Past every interval, nothing is due and nothing is sent.
+    let ticks = chat.named("loop.tick").len();
+    chat.bridge
+        .poll_loops_at(std::time::Instant::now() + Duration::from_secs(3_600));
+    assert_eq!(chat.named("loop.tick").len(), ticks);
+
+    // A goal that replaces a goal, with no loop live, says nothing of loops.
+    let again = chat.goal("a.txt says three");
+    assert!(
+        !again["lines"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(t!(desktop_goal_replaces_loops).to_string())),
+        "{again}"
+    );
+    assert_eq!(chat.named("loop.ended").len(), 2);
+}
+
+/// GOAL-11: a person's `/loop` takes a goal off, paused or not, says so, sends `goal.changed` with
+/// a null goal, and the loop's turn is not told of the goal. A `/loop` where no goal is set says
+/// nothing of one and sends no `goal.changed`. The regressions it rejects: a loop started beside
+/// a goal that goes on judging, a replaced goal that is not announced to the window, and a paused
+/// goal left set.
+#[test]
+fn a_persons_loop_replaces_a_goal_paused_or_not_and_says_so() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    for paused in [false, true] {
+        let mut chat = served(Answers::Done);
+        let condition = "the-goal-a-loop-replaces";
+        chat.goal(condition);
+        if paused {
+            chat.goal("pause");
+        }
+        let before = chat.named("goal.changed").len();
+
+        let answer = typed_loop(&mut chat, "5m check the deploy");
+
+        assert_eq!(answer["refused"], false, "{answer}");
+        assert_eq!(answer["number"], 1);
+        assert_eq!(
+            answer["lines"][0],
+            t!(desktop_loop_replaces_goal).to_string(),
+            "paused: {paused}"
+        );
+        assert!(chat.slot().running.is_none(), "paused: {paused}");
+        let changed = chat.named("goal.changed");
+        assert_eq!(changed.len(), before + 1, "paused: {paused}");
+        assert_eq!(changed.last().unwrap().data["goal"], Value::Null);
+        assert_eq!(chat.ended(1), "turn.done");
+        let bodies = chat.bodies.lock().unwrap().clone();
+        assert!(!bodies[0].contains(condition), "{}", bodies[0]);
+        assert_eq!(chat.proceed(), json!({ "started": false }));
+
+        // With no goal left, another loop says nothing of one.
+        let second = typed_loop(&mut chat, "5m another");
+        assert_eq!(chat.named("goal.changed").len(), before + 1);
+        assert!(
+            !second["lines"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(t!(desktop_loop_replaces_goal).to_string())),
+            "{second}"
+        );
+    }
+}
+
+/// GOAL-11, LOOP-18: a person's `/after` takes a goal off, paused or not, says so and sends
+/// `goal.changed` with a null goal, as `/loop` does. The regressions it rejects: an `/after` line
+/// held beside a goal, and a goal replaced without the window being told.
+#[test]
+fn a_persons_after_replaces_a_goal_paused_or_not_and_says_so() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    for paused in [false, true] {
+        let mut chat = served(Answers::Done);
+        chat.goal("a.txt says two");
+        if paused {
+            chat.goal("pause");
+        }
+        let before = chat.named("goal.changed").len();
+
+        let answer = typed_after(&mut chat, "5m check the deploy");
+
+        assert_eq!(answer["refused"], false, "{answer}");
+        assert_eq!(answer["number"], 1);
+        assert_eq!(
+            answer["lines"][0],
+            t!(desktop_loop_replaces_goal).to_string(),
+            "paused: {paused}"
+        );
+        assert!(chat.slot().running.is_none(), "paused: {paused}");
+        let changed = chat.named("goal.changed");
+        assert_eq!(changed.len(), before + 1, "paused: {paused}");
+        assert_eq!(changed.last().unwrap().data["goal"], Value::Null);
+        assert_eq!(chat.loop_numbers(), [1]);
+
+        // With no goal left, another line says nothing of one.
+        let second = typed_after(&mut chat, "5m another");
+        assert_eq!(chat.named("goal.changed").len(), before + 1);
+        assert!(
+            !second["lines"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(t!(desktop_loop_replaces_goal).to_string())),
+            "{second}"
+        );
+    }
+}
+
+/// GOAL-11: a `/loop` or `/after` that is refused leaves the goal as it was, and the goal is cleared
+/// only where the loop starts. The refusals: an argument with nothing to send, a session that
+/// could not start a turn, a turn in flight, and five loops already held. The regression it
+/// rejects: a command that takes the goal off before it knows whether it starts anything.
+#[test]
+fn a_refused_loop_or_after_leaves_the_goal_as_it_was() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let condition = "the-goal-a-refusal-leaves";
+    let holds = |chat: &Served| {
+        chat.slot()
+            .running
+            .as_ref()
+            .is_some_and(|goal| goal.condition() == condition)
+    };
+    let mut chat = served(Answers::Done);
+    chat.goal(condition);
+    let changes = chat.named("goal.changed").len();
+
+    assert_eq!(typed_loop(&mut chat, "5m")["refused"], true);
+    assert_eq!(typed_after(&mut chat, "5m")["refused"], true);
+    assert_eq!(typed_after(&mut chat, "check the deploy")["refused"], true);
+    assert!(holds(&chat));
+
+    // No turn could start, so no loop is recorded.
+    let handle = chat.handle.clone();
+    chat.bridge.open.get_mut(&handle).unwrap().answered_trust = false;
+    let session = chat.handle.clone();
+    let failure = chat
+        .call(
+            "loop.command",
+            json!({"session": session, "argument": "5m one"}),
+        )
+        .unwrap_err();
+    assert_ne!(failure.code, ErrorCode::TurnInFlight);
+    assert!(holds(&chat));
+    chat.bridge.open.get_mut(&handle).unwrap().answered_trust = true;
+
+    // The set is full.
+    {
+        let open = chat.bridge.open.get(&handle).unwrap();
+        let mut loops = open.loops.lock().unwrap();
+        for _ in 0..bravebot_agent::repeat::MAX_LIVE {
+            loops.start(bravebot_agent::repeat::Running::begin(
+                bravebot_agent::repeat::parse("5m held").started().unwrap(),
+            ));
+        }
+    }
+    assert_eq!(typed_loop(&mut chat, "5m one more")["refused"], true);
+    assert_eq!(typed_after(&mut chat, "5m one more")["refused"], true);
+    assert!(holds(&chat));
+    assert_eq!(chat.named("goal.changed").len(), changes);
+
+    // A turn is in flight.
+    let mut chat = served(Answers::Slowly);
+    chat.goal(condition);
+    chat.send("work on it");
+    let session = chat.handle.clone();
+    let failure = chat
+        .call(
+            "loop.command",
+            json!({"session": session, "argument": "5m one"}),
+        )
+        .unwrap_err();
+    assert_eq!(failure.code, ErrorCode::TurnInFlight);
+    assert!(holds(&chat));
+}
+
+/// GOAL-11, GOAL-10: a goal whose check is out to the judge when a person's `/after` replaces it
+/// leaves the check out, so the chat takes no turn and the loop clock sends no tick until its
+/// worker has settled. The verdict is then neither reported nor acted on, no step is stored, and
+/// the loop `/after` started is still live and sends its tick. The regressions it rejects: a
+/// replacement that frees the chat while the request is out, a verdict reported for a goal that
+/// is gone, and a loop ended or a step stored by the stale verdict.
+#[test]
+fn a_goal_check_out_when_after_replaces_the_goal_neither_ends_nor_starts_a_loop() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let mut chat = served_judging(Answers::Done, Judge::Slowly);
+    chat.goal("a.txt says two");
+    chat.send("work on it");
+    chat.ended(1);
+    assert_eq!(chat.proceed(), json!({ "started": "check" }));
+    assert!(chat.slot().is_judging());
+
+    let answer = typed_after(&mut chat, "5m check the deploy");
+    assert_eq!(answer["refused"], false, "{answer}");
+    assert!(chat.slot().running.is_none());
+    assert!(chat.slot().is_judging(), "the replacement freed the chat");
+    assert_eq!(chat.loop_numbers(), [1]);
+
+    // Nothing starts while the check is out: not the person's turn, and not the loop's tick.
+    let refused = Request::parse(
+        &json!({"id": 4, "method": "turn.send", "params":
+            crate::message_ids::with_fresh(json!({"session": chat.handle, "prompt": "more"}))})
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        chat.bridge.dispatch(&refused).unwrap_err().code,
+        ErrorCode::TurnInFlight
+    );
+    chat.bridge
+        .poll_loops_at(std::time::Instant::now() + Duration::from_secs(3_600));
+    assert!(chat.named("loop.tick").is_empty());
+
+    // The verdict, MET, arrives for a goal that is gone.
+    assert!(chat.settled().is_empty());
+    assert!(
+        chat.bridge.workers[&chat.handle].wait_idle(Duration::from_secs(30)),
+        "the check's worker never ended"
+    );
+    assert!(chat.named("goal.judged").is_empty());
+    assert!(chat.named("loop.ended").is_empty());
+    {
+        let slot = chat.slot();
+        assert!(slot.running.is_none());
+        assert!(!slot.due);
+        assert!(slot.carry_on.is_none());
+    }
+    assert_eq!(chat.proceed(), json!({ "started": false }));
+    assert_eq!(chat.loop_numbers(), [1]);
+
+    // The loop goes on and sends its tick.
+    chat.bridge
+        .poll_loops_at(std::time::Instant::now() + Duration::from_secs(3_600));
+    assert_eq!(chat.named("loop.tick").len(), 1);
+    chat.ended(2);
+}
+
+/// GOAL-11, LOOP-14: a turn under a goal, paused or not, starts no loop, whether the goal was set
+/// before the turn or while it ran. A typed turn with no goal that asks to look again starts one,
+/// which shows the scripted planner does ask. The regressions it rejects: a loop started under
+/// the goal, and a turn's end that reads the goal as it stood when the turn began.
+#[test]
+fn a_turn_under_a_goal_starts_no_loop_even_when_the_goal_was_set_while_it_ran() {
+    const LINE: &str = "tell me when the CI check changes";
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+
+    let mut control = served(Answers::Look);
+    control.send(LINE);
+    control.ended(1);
+    assert_eq!(control.loop_numbers(), [1]);
+    assert_eq!(control.named("loop.armed").len(), 1);
+
+    for paused in [false, true] {
+        // Set before the turn.
+        let mut chat = served(Answers::Look);
+        chat.goal("a.txt says two");
+        if paused {
+            chat.goal("pause");
+        }
+        chat.send(LINE);
+        chat.ended(1);
+        assert!(
+            chat.loop_numbers().is_empty(),
+            "set before, paused: {paused}"
+        );
+        assert!(chat.named("loop.armed").is_empty());
+        assert!(chat.slot().running.is_some());
+
+        // Set while the turn runs, which was offered a later look when it began.
+        let mut chat = served(Answers::LookSlowly);
+        chat.send(LINE);
+        chat.goal("a.txt says two");
+        assert!(
+            chat.named("turn.done").is_empty(),
+            "the turn ended before the goal was set, so the goal was not set while it ran"
+        );
+        if paused {
+            chat.goal("pause");
+        }
+        chat.ended(1);
+        assert!(
+            chat.loop_numbers().is_empty(),
+            "set during, paused: {paused}"
+        );
+        assert!(chat.named("loop.armed").is_empty());
+        assert!(chat.slot().running.is_some());
+    }
 }

@@ -325,9 +325,15 @@ own turn's end makes the check due again.
 
 Whichever was asked for second stands, and the one it replaced is reported as stopped. A paused
 goal ([GOAL-18](#GOAL-18)) is not running, but it is still a goal: a person's `/loop` replaces it
-and says so, and a loop or watch a turn asks for is refused under it, as under a running one. A desktop chat has
-no `/loop`, so there setting a goal ends the chat's live watches, each reported as ended by the
-goal, and a turn under a goal, paused or not, may arm none.
+and says so, and a loop or watch a turn asks for is refused under it, as under a running one. Setting
+a goal ends every live loop and watch, each reported as ended by the goal, and says so in its
+answer. A turn under a goal, paused or not, arms neither a watch nor a loop, including a turn that
+began before the goal was set and ends under it. A `/loop` or `/after` that is refused leaves the
+goal as it was. This holds in the terminal and in the desktop app.
+
+A goal check out to the judge when a person's `/loop` or `/after` replaces the goal is left to
+settle, so the chat takes no turn and the desktop sends no loop tick until it has. Its verdict is
+dropped: it is not reported, ends no loop and stores no step.
 
 **Why.** Both keep a session working without anybody typing, and together neither is the thing that
 was asked for: the interval stops meaning anything once a tick can be held open for ten more turns,
@@ -335,6 +341,13 @@ and the condition is judged against a turn that was going to be repeated anyway.
 
 `verified-by: bravebot_tui::state::a_goal_and_a_loop_are_never_both_running`
 `verified-by: bravebot_ui_bridge::goal_tests::setting_a_goal_ends_the_watches`
+`verified-by: bravebot_ui_bridge::goal_tests::setting_a_goal_ends_every_loop_and_says_so`
+`verified-by: bravebot_ui_bridge::goal_tests::a_persons_loop_replaces_a_goal_paused_or_not_and_says_so`
+`verified-by: bravebot_ui_bridge::goal_tests::a_persons_after_replaces_a_goal_paused_or_not_and_says_so`
+`verified-by: bravebot_ui_bridge::goal_tests::a_refused_loop_or_after_leaves_the_goal_as_it_was`
+`verified-by: bravebot_ui_bridge::goal_tests::a_turn_under_a_goal_starts_no_loop_even_when_the_goal_was_set_while_it_ran`
+`verified-by: bravebot_ui_bridge::loop_command_tests::a_turn_that_asked_to_look_again_under_a_goal_starts_no_loop`
+`verified-by: bravebot_ui_bridge::goal_tests::a_goal_check_out_when_after_replaces_the_goal_neither_ends_nor_starts_a_loop`
 `verified-by: bravebot_ui_bridge::goal_tests::a_turn_under_a_goal_arms_no_watch_and_its_calls_are_counted`
 
 <a id="GOAL-12"></a>

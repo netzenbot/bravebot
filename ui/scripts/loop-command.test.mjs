@@ -121,6 +121,7 @@ test('an ending says which loop ended, or how many a stop ended (LOOP-11)', () =
   assert.equal(transcript.loopEnded({ reason: 'stopped', count: 1 }).text, 'The loop stopped.')
   assert.equal(transcript.loopEnded({ number: 1, reason: 'stopped' }).text, 'Loop 1 stopped.')
   assert.match(transcript.loopEnded({ number: 1, reason: 'aged' }).text, /^Loop 1 ended: .*\.$/)
+  assert.equal(transcript.loopEnded({ number: 2, reason: 'goal' }).text, 'Loop 2 ended: a goal was set.')
   assert.match(transcript.loopEnded({ number: 1, reason: 'failed', message: 'No model.' }).text, /sent\. No model\.$/)
   const armed = heard(live(), { event: 'loop.armed', session: 's', data: { number: 1, after: '20m' } })
   assert.match(armed.entries.at(-1).text, /^Loop 1 repeats: .*20m\. \/loop stop 1 ends it, and so does Stop or closing the chat\.$/)

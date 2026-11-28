@@ -754,6 +754,11 @@ it is stated.
   idle. `bravebot sessions` shows it idle and a second stop ends it.
 - **A session outside a repository shares its directory.** [BG-14](#BG-14) separates sessions only
   where git can.
+- **A desktop chat with a live loop is handed over and its loops end with it.** The desktop's
+  Continue in Background… ([CMD-34](commands.md#CMD-34)) counts a chat's watches and its goal and
+  does not count its loops, which `/bg` counts, so the chat is closed with its loops live and the
+  background session starts with none. A person who wants the loops to go on starts them again in
+  the background session.
 - **Unix first.** The attach channel is a socket in a directory only its owner can enter. Where that
   cannot be restricted, [BG-1](#BG-1) refuses a background session.
 - **Lines need a pipe on a terminal.** `bravebot sessions` draws the list there, so a person who
