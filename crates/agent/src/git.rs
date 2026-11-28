@@ -6848,16 +6848,16 @@ mod tests {
         }
 
         /// CHECKOUT-18. A size is spelled in kilobytes, rounded up, under a megabyte, megabytes
-        /// under a gigabyte and gigabytes from there, the unit chosen after rounding, and as a
-        /// lower bound where it is one.
+        /// under a gigabyte and gigabytes from there, the unit chosen after rounding. A lower bound
+        /// is spelled as the whole size is, since the words that mark one belong to the sentence.
         #[test]
         fn a_size_is_spelled_in_kilobytes_megabytes_or_gigabytes() {
             use crate::git::checkout::Size;
-            let spelled = |bytes, whole| Size { bytes, whole }.spelled();
+            let spelled = |bytes, whole| Size { bytes, whole }.said();
             assert_eq!(spelled(0, true), "0 KB");
             assert_eq!(spelled(4097, true), "5 KB");
             assert_eq!(spelled(MEGABYTE - 1024, true), "1023 KB");
-            assert_eq!(spelled(MEGABYTE - 1, false), "at least 1.0 MB");
+            assert_eq!(spelled(MEGABYTE - 1, false), "1.0 MB");
             assert_eq!(spelled(MEGABYTE, true), "1.0 MB");
             assert_eq!(spelled(5 * MEGABYTE + 300 * 1024, true), "5.3 MB");
             assert_eq!(spelled(1023 * MEGABYTE, true), "1023.0 MB");
@@ -6866,7 +6866,7 @@ mod tests {
             assert_eq!(spelled(1024 * MEGABYTE, true), "1.0 GB");
             assert_eq!(
                 spelled(7 * 1024 * MEGABYTE + 512 * MEGABYTE, false),
-                "at least 7.5 GB"
+                "7.5 GB"
             );
             assert_eq!(spelled(u64::MAX, true), "17179869184.0 GB");
         }

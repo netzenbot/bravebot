@@ -1830,7 +1830,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                             delegate_end::budget_sentences(limit.budget, tokens, true);
                         let note = match said.is_empty() {
                             true => note,
-                            false => format!("{note}; {said}"),
+                            false => delegate_end::joined_by_semicolon(note, &said),
                         };
                         (note, format!("{bound}{told}"))
                     }
@@ -1841,7 +1841,10 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     Some((work, session_writes, in_checkout)) => {
                         let (said, told) =
                             delegate_end::work_sentences(work, session_writes, in_checkout);
-                        (format!("{note}; {said}"), format!("{bound}{told}"))
+                        (
+                            delegate_end::joined_by_semicolon(note, &said),
+                            format!("{bound}{told}"),
+                        )
                     }
                     None => (note, bound),
                 };
@@ -1885,7 +1888,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                 let (said, told) = delegate_end::budget_sentences(limit.budget, tokens, false);
                 let note = match said.is_empty() {
                     true => note,
-                    false => format!("{note}, {said}"),
+                    false => delegate_end::joined_by_comma(note, &said),
                 };
                 // A delegate that stopped or failed did what it did all the same. One whose thread
                 // died handed back nothing, so nothing is said (GROUND-2).
@@ -1893,7 +1896,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     Some((work, session_writes, in_checkout)) => {
                         let (said, told) =
                             delegate_end::work_sentences(work, session_writes, in_checkout);
-                        (format!("{note}; {said}"), told)
+                        (delegate_end::joined_by_semicolon(note, &said), told)
                     }
                     None => (note, String::new()),
                 };
@@ -1911,7 +1914,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
             let (said, mark) = delegate_end::checkout_account(retired, &checkout, beside);
             body.push_str("\n\n");
             body.push_str(&said);
-            note = format!("{note}; {mark}");
+            note = delegate_end::joined_by_semicolon(note, &mark);
         }
 
         reporter.delegate_finished(id, note, failed, reported);

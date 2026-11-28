@@ -10,6 +10,7 @@ use std::time::Duration;
 use bravebot_core::delegate::{DelegateId, Finish};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
+use bravebot_i18n::t;
 
 use super::{TOOL_BUDGET_SPENT, TurnError, Worked, Working};
 use crate::outcome::Category;
@@ -61,6 +62,9 @@ fn cause_named(name: &str) -> Option<crate::outcome::TransportCause> {
 /// The three sentences around a delegate's report: the person's note, the driver's account of a
 /// stop, and the planner's account of a limit.
 ///
+/// The first value is read by the person and is looked up in the catalog (LOCALE-1). The other two
+/// are read by the planner and stay in the source.
+///
 /// Two counts the driver already holds: the rounds this delegate made, and the bound its spec
 /// fixed before it started. Nothing here reads the report, so the comparison is between
 /// driver-held numbers and never between bytes a delegate wrote (DELEGATE-26).
@@ -71,18 +75,13 @@ pub(super) fn answered_sentences(
     bound: usize,
     stop_honoured: bool,
 ) -> (String, String, String) {
-    let tally = tools::tally(rounds, "round", "rounds");
     let reached = rounds >= bound;
+    // One lookup per sentence with a name written here (LOCALE-2). The catalog's language counts
+    // the rounds (LOCALE-5).
     let note = match (stop_honoured, reached) {
-        (true, _) => format!(
-            "the person stopped a {kind} delegate after {tally} and it answered with \
-             what it had"
-        ),
-        (false, true) => format!(
-            "a {kind} delegate reached its limit of {tally} and answered with what it \
-             had, so it may not be finished"
-        ),
-        (false, false) => format!("a {kind} delegate answered after {tally}"),
+        (true, _) => t!(delegate_answered_stopped, kind = kind, rounds = rounds),
+        (false, true) => t!(delegate_answered_at_limit, kind = kind, rounds = rounds),
+        (false, false) => t!(delegate_answered, kind = kind, rounds = rounds),
     };
     // Said before the report, in the driver's own words, as whose work a report is
     // is (DELEGATE-14). The report keeps the label its own context earned.
@@ -104,8 +103,9 @@ pub(super) fn answered_sentences(
     (note, stopped, bound_text)
 }
 
-/// What a spent token budget adds beside a delegate's report: a clause for the person's note and
-/// a sentence for the planner, both empty where the delegate carried no budget or stayed under it.
+/// What a spent token budget adds beside a delegate's report: a clause for the person's note, read
+/// from the catalog (LOCALE-1), and a sentence for the planner, which stays in the source. Both
+/// are empty where the delegate carried no budget or stayed under it.
 ///
 /// Two counts the driver holds: the budget its spec fixed and the tokens its backend reported,
 /// never a report's bytes (DELEGATE-29). `answered` says whether there is a report to sit beside:
@@ -120,11 +120,11 @@ pub(super) fn budget_sentences(
     };
     match answered {
         true => (
-            format!("it spent its budget of {budget} tokens, so it may not be finished"),
+            t!(delegate_budget_answered, budget = budget),
             format!(" It spent its budget of {budget} tokens and may not be finished."),
         ),
         false => (
-            format!("having spent its budget of {budget} tokens"),
+            t!(delegate_budget_spent, budget = budget),
             format!(
                 " It had spent its budget of {budget} tokens, so the same task will not get \
                  further."
@@ -134,6 +134,10 @@ pub(super) fn budget_sentences(
 }
 
 /// The person's note and the planner's message for a delegate that ended without answering.
+///
+/// The first value is read by the person and is looked up in the catalog (LOCALE-1). The second is
+/// read by the planner and stays in the source: a translation must not change what the model is
+/// told, so no `t!` is written in `cause_text`, `bound_text` or the body built from them.
 pub(super) fn unfinished_account(
     finish: &Finish,
     ran: Option<(Duration, usize)>,
@@ -221,31 +225,42 @@ pub(super) fn unfinished_account(
         }
         _ => "",
     };
-    // The same fixed name the trail records, and never the error's own text, with which part of
-    // the request ended where the driver knows it.
+    // The person's note is read from the catalog (LOCALE-1), one lookup per sentence with a name
+    // written here (LOCALE-2). It carries the same fixed name the trail records, and never the
+    // error's own text, with which part of the request ended where the driver knows it.
     let note = match (finish, cause) {
-        (Finish::Failed { why, .. }, Some(cause)) => format!(
-            "the delegate could not finish ({why}: {})",
-            match cause {
-                TransportCause::Connection => "the connection failed",
-                TransportCause::Begin => "the reply did not begin",
-                TransportCause::IdleGap => "the reply went quiet",
-            }
-        ),
-        (Finish::Failed { why, .. }, None) => format!("the delegate could not finish ({why})"),
-        (Finish::Stopped { .. }, _) => "the delegate was stopped".to_string(),
-        _ => "the delegate could not finish".to_string(),
+        (Finish::Failed { why, .. }, Some(cause)) => {
+            let part = match cause {
+                TransportCause::Connection => t!(delegate_cause_connection),
+                TransportCause::Begin => t!(delegate_cause_begin),
+                TransportCause::IdleGap => t!(delegate_cause_idle_gap),
+            };
+            t!(delegate_unfinished_why_cause, why = *why, cause = part)
+        }
+        (Finish::Failed { why, .. }, None) => t!(delegate_unfinished_why, why = *why),
+        (Finish::Stopped { .. }, _) => t!(delegate_stopped).to_string(),
+        _ => t!(delegate_unfinished).to_string(),
     };
+    // The catalog's language counts the rounds, so the plural is its own (LOCALE-5).
     let note = match reached {
-        true => format!(
-            "{note}, having spent its limit of {}",
-            tools::tally(bound, "round", "rounds")
-        ),
+        true => t!(delegate_unfinished_at_limit, note = note, rounds = bound),
         false => note,
     };
     let body =
         format!("{TOOL_BUDGET_SPENT} The delegate {id} did not finish.{cause_text}{bound_text}");
     (note, body)
+}
+
+/// What the person's note reads between its own words and a clause that follows after a comma, in
+/// the catalog's own punctuation (LOCALE-1).
+pub(super) fn joined_by_comma(note: String, clause: &str) -> String {
+    t!(delegate_note_comma, note = note, clause = clause)
+}
+
+/// What the person's note reads between its own words and a clause that follows after a
+/// semicolon, in the catalog's own punctuation and spacing (LOCALE-1).
+pub(super) fn joined_by_semicolon(note: String, clause: &str) -> String {
+    t!(delegate_note_semicolon, note = note, clause = clause)
 }
 
 /// What a kept checkout's note says about bringing its files back, naming `apply_checkout` only
@@ -266,7 +281,28 @@ fn apply_checkout_clause(beside: tools::Beside, id: &str, path: &std::path::Path
     }
 }
 
+/// What the person's note says of a checkout that was kept: its number, and its size where it was
+/// measured, as a lower bound where not every directory could be read.
+fn kept_mark(id: &str, size: Option<crate::git::checkout::Size>) -> String {
+    match size {
+        Some(size) if size.whole => t!(
+            delegate_checkout_kept_size_mark,
+            id = id,
+            size = size.said()
+        ),
+        Some(size) => t!(
+            delegate_checkout_kept_size_partial_mark,
+            id = id,
+            size = size.said()
+        ),
+        None => t!(delegate_checkout_kept_mark, id = id),
+    }
+}
+
 /// What the planner is told about a delegate's checkout, and the clause the person's note gains.
+///
+/// The first value is read by the planner and stays in the source. The second is read by the
+/// person and is looked up in the catalog (LOCALE-1).
 ///
 /// `beside` is the collecting turn's own tool list: `apply_checkout` is never offered to a
 /// delegate, so a turn that is itself a delegate collecting another delegate's kept checkout is
@@ -283,7 +319,7 @@ pub(super) fn checkout_account(
                 "Its checkout {} was removed, since nothing was done in it.",
                 checkout.id()
             ),
-            "its checkout was removed".to_string(),
+            t!(delegate_checkout_removed_mark).to_string(),
         ),
         // The size is the person's alone. It is a measure of files programs wrote, and the
         // planner decides nothing by it.
@@ -297,14 +333,7 @@ pub(super) fn checkout_account(
                 crate::delegate::checkout_candidates(&checkout.candidates()),
                 apply_checkout_clause(beside, checkout.id(), checkout.path()),
             ),
-            match checkout.size() {
-                Some(size) => format!(
-                    "its checkout {} was kept, taking {} on disk",
-                    checkout.id(),
-                    size.spelled()
-                ),
-                None => format!("its checkout {} was kept", checkout.id()),
-            },
+            kept_mark(checkout.id(), checkout.size()),
         ),
         Retired::Stuck => stuck_checkout(checkout.id(), checkout.commit(), checkout.path()),
     }
@@ -314,6 +343,10 @@ pub(super) fn checkout_account(
 /// program and how many changed a file, and where (GROUND-2, GROUND-3). The writes are said to be
 /// in the project, or in its own checkout where it worked in one, and a count of the writes that
 /// landed in the session's own directory follows where there were any.
+///
+/// The first value is read by the person and is looked up in the catalog (LOCALE-1), each count
+/// in the plural of the catalog's language (LOCALE-5). The second is read by the planner and stays
+/// in the source.
 ///
 /// Fixed words and three counts the driver holds. No path, no command and no word of a report, so
 /// a delegate cannot speak to the planner through them (GROUND-6).
@@ -335,18 +368,32 @@ pub(super) fn work_sentences(
             count => format!(" and {count} in the session directory"),
         }
     );
-    (format!("it {did}"), format!(" It {did}."))
+    let place = match in_checkout {
+        true => t!(delegate_work_in_checkout),
+        false => t!(delegate_work_in_project),
+    };
+    let seen = t!(
+        delegate_work,
+        commands = t!(delegate_work_commands, count = work.commands),
+        writes = t!(delegate_work_writes, count = work.writes),
+        place = place
+    );
+    let seen = match session_writes {
+        0 => seen,
+        session => t!(delegate_work_and_session, work = seen, session = session),
+    };
+    (seen, format!(" It {did}."))
 }
 
 /// What is said of a checkout nothing was done in that could not be removed: where it is and the
-/// commit it holds, for the planner, and the fact alone for the person.
+/// commit it holds, for the planner, and the fact alone, from the catalog, for the person.
 fn stuck_checkout(id: &str, commit: &str, path: &std::path::Path) -> (String, String) {
     (
         format!(
             "Its checkout {id} of commit {commit} could not be removed and is at {}.",
             path.display()
         ),
-        "its checkout could not be removed".to_string(),
+        t!(delegate_checkout_stuck_mark).to_string(),
     )
 }
 
@@ -864,6 +911,324 @@ mod tests {
                 why: "undecodable",
                 cause: None,
             }
+        );
+    }
+
+    /// Runs the calling test again in a process that chose French before it asked for anything, and
+    /// returns false in the process that called it, once that run has passed. The catalog is chosen
+    /// once per process (LOCALE-7), so a test that reads a catalog other than the reference needs a
+    /// process of its own. A run that executed no test fails, so a filter that matches nothing is
+    /// not a pass.
+    #[expect(clippy::expect_used, reason = "a test fails by panicking")]
+    fn in_french(test: &str) -> bool {
+        const CHILD: &str = "FRENCH_CHILD_OF_THE_DELEGATE_NOTE";
+        if std::env::var_os(CHILD).is_none() {
+            let name = module_path!()
+                .split_once("::")
+                .map_or("", |(_, path)| path)
+                .to_string()
+                + "::"
+                + test;
+            // nosemgrep: rust.lang.security.current-exe.current-exe
+            let child = std::process::Command::new(std::env::current_exe().expect("a test binary"))
+                .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .expect("the test binary starts");
+            let report = String::from_utf8_lossy(&child.stdout).into_owned()
+                + &String::from_utf8_lossy(&child.stderr);
+            assert!(
+                report.contains("1 passed"),
+                "the child ran nothing: {report}"
+            );
+            assert!(child.status.success(), "{report}");
+            return false;
+        }
+        bravebot_i18n::init(bravebot_i18n::resolve("fr"));
+        assert_eq!(
+            bravebot_i18n::locale().tag(),
+            "fr",
+            "the child chose no catalog"
+        );
+        true
+    }
+
+    /// LOCALE-1, LOCALE-5, LOCALE-7. The person's note for a delegate that did not finish is read
+    /// from the chosen catalog, and the planner's message beside it is the same in every language.
+    ///
+    /// The faults this rejects: the note kept as a source literal (it would read as English), the
+    /// category or the cause phrase dropped or left in English, the round count left out or formed
+    /// by English's plural (French counts 0 as singular, so `0 tour` is the form and `0 tours` the
+    /// fault; `1 tours` and `9 tour` likewise), the limit clause missing from an ending that has a
+    /// cause, one that was stopped, or one that left no record, and the planner's message taken
+    /// from the catalog.
+    #[test]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+    fn the_note_for_a_delegate_that_did_not_finish_is_said_in_the_chosen_catalog() {
+        let took = Duration::from_secs(3);
+        let failed = |why: &'static str, cause: Option<&'static str>, rounds| Finish::Failed {
+            took,
+            rounds,
+            why,
+            cause,
+        };
+        let note = |finish: Finish, ran, bound| {
+            unfinished_account(&finish, ran, bound, DelegateId::nth(1))
+        };
+        let planner_in_english = [
+            note(failed("unavailable", None, 9), Some((took, 9)), 9).1,
+            note(Finish::Lost, None, 9).1,
+            note(
+                failed("transport", Some("connection"), 2),
+                Some((took, 2)),
+                2,
+            )
+            .1,
+            note(Finish::Stopped { took, rounds: 1 }, Some((took, 1)), 1).1,
+        ];
+        if !in_french("the_note_for_a_delegate_that_did_not_finish_is_said_in_the_chosen_catalog") {
+            return;
+        }
+
+        assert_eq!(
+            note(
+                failed("transport", Some("connection"), 2),
+                Some((took, 2)),
+                9
+            )
+            .0,
+            "le delegue n'a pas pu terminer (transport : la connexion a echoue)"
+        );
+        assert_eq!(
+            note(failed("transport", Some("begin"), 2), Some((took, 2)), 9).0,
+            "le delegue n'a pas pu terminer (transport : la reponse n'a pas commence)"
+        );
+        assert_eq!(
+            note(
+                failed("incomplete", Some("idle-gap"), 2),
+                Some((took, 2)),
+                9
+            )
+            .0,
+            "le delegue n'a pas pu terminer (incomplete : la reponse s'est tue)"
+        );
+        assert_eq!(
+            note(failed("unavailable", None, 4), Some((took, 4)), 9).0,
+            "le delegue n'a pas pu terminer (unavailable)"
+        );
+        assert_eq!(
+            note(Finish::Stopped { took, rounds: 4 }, Some((took, 4)), 9).0,
+            "le delegue a ete arrete"
+        );
+        assert_eq!(
+            note(Finish::Lost, None, 9).0,
+            "le delegue n'a pas pu terminer"
+        );
+        // The limit is counted by the catalog's own plural: a singular and a plural, and French
+        // counts none as singular where English does not.
+        assert_eq!(
+            note(failed("unavailable", None, 9), Some((took, 9)), 9).0,
+            "le delegue n'a pas pu terminer (unavailable), apres avoir atteint sa limite de 9 tours"
+        );
+        assert_eq!(
+            note(failed("unavailable", None, 1), Some((took, 1)), 1).0,
+            "le delegue n'a pas pu terminer (unavailable), apres avoir atteint sa limite de 1 tour"
+        );
+        assert_eq!(
+            note(failed("unavailable", None, 0), Some((took, 0)), 0).0,
+            "le delegue n'a pas pu terminer (unavailable), apres avoir atteint sa limite de 0 tour"
+        );
+        // The limit follows every kind of ending, each of which builds its own sentence first.
+        assert_eq!(
+            note(
+                failed("transport", Some("connection"), 2),
+                Some((took, 2)),
+                2
+            )
+            .0,
+            "le delegue n'a pas pu terminer (transport : la connexion a echoue), apres avoir \
+             atteint sa limite de 2 tours"
+        );
+        assert_eq!(
+            note(Finish::Stopped { took, rounds: 1 }, Some((took, 1)), 1).0,
+            "le delegue a ete arrete, apres avoir atteint sa limite de 1 tour"
+        );
+        assert_eq!(
+            note(Finish::Lost, Some((took, 0)), 0).0,
+            "le delegue n'a pas pu terminer, apres avoir atteint sa limite de 0 tour"
+        );
+
+        // What the planner reads is the same in French as in the reference.
+        assert_eq!(
+            note(failed("unavailable", None, 9), Some((took, 9)), 9).1,
+            planner_in_english[0]
+        );
+        assert_eq!(note(Finish::Lost, None, 9).1, planner_in_english[1]);
+        assert_eq!(
+            note(
+                failed("transport", Some("connection"), 2),
+                Some((took, 2)),
+                2
+            )
+            .1,
+            planner_in_english[2]
+        );
+        assert_eq!(
+            note(Finish::Stopped { took, rounds: 1 }, Some((took, 1)), 1).1,
+            planner_in_english[3]
+        );
+    }
+
+    /// LOCALE-1, LOCALE-5. The rest of the note a person reads under a delegate that ended, for one
+    /// that answered and one that did not, is read from the chosen catalog, and the sentences the
+    /// planner reads beside them are the same in every language.
+    ///
+    /// The faults this rejects: a sentence kept as a source literal (it reads as English under
+    /// French), a count formed by English's plural (`0 commandes`, `0 tours` and `0 ecritures` where
+    /// French counts none as singular, and `1 tours` or `2 tour` for the others), the words that
+    /// mark a lower bound or the session directory left in English, a joiner left as English
+    /// punctuation (French spaces a semicolon), and a planner sentence taken from the catalog.
+    #[test]
+    #[expect(clippy::too_many_lines, reason = "a test of one clause with its setup")]
+    fn the_rest_of_a_delegate_s_note_is_said_in_the_chosen_catalog() {
+        use super::{
+            answered_sentences, budget_sentences, joined_by_comma, joined_by_semicolon, kept_mark,
+        };
+        use crate::git::checkout::Size;
+        let id = DelegateId::nth(2);
+        let work = |commands, writes| crate::outcome::Work {
+            writes,
+            commands,
+            ran_after_last_write: false,
+            last_command_failed: false,
+        };
+        let english = (
+            answered_sentences("review", id, 3, 3, false),
+            answered_sentences("review", id, 3, 3, true),
+            budget_sentences(Some(1000), 1000, true),
+            budget_sentences(Some(1000), 1000, false),
+            work_sentences(work(2, 3), 1, false),
+            stuck_checkout("c4", "0123", Path::new("/state/c4")),
+        );
+        if !in_french("the_rest_of_a_delegate_s_note_is_said_in_the_chosen_catalog") {
+            return;
+        }
+
+        // A delegate that answered. French counts none as singular, so 0 and 1 are `tour`.
+        let said =
+            |rounds, bound, stopped| answered_sentences("review", id, rounds, bound, stopped);
+        assert_eq!(
+            said(0, 3, false).0,
+            "un delegue review a repondu apres 0 tour"
+        );
+        assert_eq!(
+            said(1, 3, false).0,
+            "un delegue review a repondu apres 1 tour"
+        );
+        assert_eq!(
+            said(2, 3, false).0,
+            "un delegue review a repondu apres 2 tours"
+        );
+        assert_eq!(
+            said(3, 3, false).0,
+            "un delegue review a atteint sa limite de 3 tours et a repondu avec ce qu'il avait, \
+             il n'a donc peut-etre pas termine"
+        );
+        assert_eq!(
+            said(1, 1, false).0,
+            "un delegue review a atteint sa limite de 1 tour et a repondu avec ce qu'il avait, \
+             il n'a donc peut-etre pas termine"
+        );
+        assert_eq!(
+            said(0, 0, false).0,
+            "un delegue review a atteint sa limite de 0 tour et a repondu avec ce qu'il avait, \
+             il n'a donc peut-etre pas termine"
+        );
+        assert_eq!(
+            said(0, 3, true).0,
+            "vous avez arrete un delegue review apres 0 tour et il a repondu avec ce qu'il avait"
+        );
+        assert_eq!(
+            said(1, 3, true).0,
+            "vous avez arrete un delegue review apres 1 tour et il a repondu avec ce qu'il avait"
+        );
+        assert_eq!(
+            said(3, 3, true).0,
+            "vous avez arrete un delegue review apres 3 tours et il a repondu avec ce qu'il avait"
+        );
+        assert_eq!(said(3, 3, false).1, english.0.1);
+        assert_eq!(said(3, 3, false).2, english.0.2);
+        assert_eq!(said(3, 3, true).1, english.1.1);
+
+        // The token budget, for a delegate that answered and one that did not.
+        assert_eq!(
+            budget_sentences(Some(1000), 1000, true).0,
+            "il a depense son budget de 1000 jetons, il n'a donc peut-etre pas termine"
+        );
+        assert_eq!(
+            budget_sentences(Some(1000), 1000, false).0,
+            "apres avoir depense son budget de 1000 jetons"
+        );
+        assert_eq!(budget_sentences(Some(1000), 999, false).0, "");
+        assert_eq!(budget_sentences(Some(1000), 1000, true).1, english.2.1);
+        assert_eq!(budget_sentences(Some(1000), 1000, false).1, english.3.1);
+
+        // What it did: each count by the catalog's plural, the place, and the session directory.
+        assert_eq!(
+            work_sentences(work(0, 0), 0, false).0,
+            "il a lance 0 commande et fait 0 ecriture dans le projet"
+        );
+        assert_eq!(
+            work_sentences(work(1, 1), 0, true).0,
+            "il a lance 1 commande et fait 1 ecriture dans sa propre copie de travail"
+        );
+        assert_eq!(
+            work_sentences(work(2, 3), 0, false).0,
+            "il a lance 2 commandes et fait 3 ecritures dans le projet"
+        );
+        assert_eq!(
+            work_sentences(work(0, 2), 1, false).0,
+            "il a lance 0 commande et fait 2 ecritures dans le projet et 1 dans le repertoire de \
+             la session"
+        );
+        assert_eq!(
+            work_sentences(work(2, 3), 1, false).1,
+            english.4.1,
+            "the planner's sentence is the reference's"
+        );
+
+        // What became of its checkout: kept (with a size, a lower bound and none), and stuck.
+        let megabyte = 1 << 20;
+        let whole = |bytes| Some(Size { bytes, whole: true });
+        assert_eq!(
+            kept_mark("c1", whole(5 * megabyte + 300 * 1024)),
+            "sa copie de travail c1 a ete gardee, elle occupe 5,3 Mo sur le disque"
+        );
+        assert_eq!(
+            kept_mark("c1", whole(4097)),
+            "sa copie de travail c1 a ete gardee, elle occupe 5 Ko sur le disque"
+        );
+        assert_eq!(
+            kept_mark(
+                "c1",
+                Some(Size {
+                    bytes: 5 * megabyte + 300 * 1024,
+                    whole: false
+                })
+            ),
+            "sa copie de travail c1 a ete gardee, elle occupe au moins 5,3 Mo sur le disque"
+        );
+        assert_eq!(kept_mark("c1", None), "sa copie de travail c1 a ete gardee");
+        let (told, mark) = stuck_checkout("c4", "0123", Path::new("/state/c4"));
+        assert_eq!(mark, "sa copie de travail n'a pas pu etre supprimee");
+        assert_eq!(told, english.5.0);
+
+        // The parts are joined in the catalog's own punctuation.
+        assert_eq!(joined_by_comma("a".to_string(), "b"), "a, b");
+        assert_eq!(
+            joined_by_semicolon("a".to_string(), "b"),
+            "a ; b",
+            "French spaces a semicolon"
         );
     }
 

@@ -977,17 +977,23 @@ impl Size {
         }
     }
 
-    /// As a person reads it, in English: `5.3 MB`, or `at least 5.3 MB` where it is a lower bound.
-    pub fn spelled(&self) -> String {
-        let amount = match self.amount() {
-            Amount::Kilobytes(kilobytes) => format!("{kilobytes} KB"),
-            Amount::Megabytes(tenths) => format!("{}.{} MB", tenths / 10, tenths % 10),
-            Amount::Gigabytes(tenths) => format!("{}.{} GB", tenths / 10, tenths % 10),
+    /// The amount as a person reads it in the catalog they chose: `5.3 MB` in English, `5,3 Mo` where
+    /// the catalog says so. A lower bound is the caller's to say, since the words that mark one
+    /// belong to the sentence the size sits in.
+    pub fn said(&self) -> String {
+        use bravebot_i18n::t;
+        let tenths = |tenths: u64| {
+            format!(
+                "{}{}{}",
+                tenths / 10,
+                t!(number_decimal_separator),
+                tenths % 10
+            )
         };
-        if self.whole {
-            amount
-        } else {
-            format!("at least {amount}")
+        match self.amount() {
+            Amount::Kilobytes(kilobytes) => t!(kilobytes, size = kilobytes.to_string()),
+            Amount::Megabytes(megabytes) => t!(megabytes, size = tenths(megabytes)),
+            Amount::Gigabytes(gigabytes) => t!(gigabytes, size = tenths(gigabytes)),
         }
     }
 

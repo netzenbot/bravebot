@@ -1703,6 +1703,59 @@ delegate-rounds-narration = { $rounds ->
    *[other] cela fait { $rounds } tours d'appels d'outils sans reponse, ce tour doit donc conclure avec ce qu'il a
     }
 
+delegate-unfinished = le delegue n'a pas pu terminer
+delegate-unfinished-why = le delegue n'a pas pu terminer ({ $why })
+delegate-unfinished-why-cause = le delegue n'a pas pu terminer ({ $why } : { $cause })
+delegate-stopped = le delegue a ete arrete
+
+delegate-cause-connection = la connexion a echoue
+delegate-cause-begin = la reponse n'a pas commence
+delegate-cause-idle-gap = la reponse s'est tue
+
+delegate-unfinished-at-limit = { $rounds ->
+    [one] { $note }, apres avoir atteint sa limite de { $rounds } tour
+   *[other] { $note }, apres avoir atteint sa limite de { $rounds } tours
+    }
+
+delegate-answered-stopped = { $rounds ->
+    [one] vous avez arrete un delegue { $kind } apres { $rounds } tour et il a repondu avec ce qu'il avait
+   *[other] vous avez arrete un delegue { $kind } apres { $rounds } tours et il a repondu avec ce qu'il avait
+    }
+delegate-answered-at-limit = { $rounds ->
+    [one] un delegue { $kind } a atteint sa limite de { $rounds } tour et a repondu avec ce qu'il avait, il n'a donc peut-etre pas termine
+   *[other] un delegue { $kind } a atteint sa limite de { $rounds } tours et a repondu avec ce qu'il avait, il n'a donc peut-etre pas termine
+    }
+delegate-answered = { $rounds ->
+    [one] un delegue { $kind } a repondu apres { $rounds } tour
+   *[other] un delegue { $kind } a repondu apres { $rounds } tours
+    }
+
+delegate-budget-answered = il a depense son budget de { $budget } jetons, il n'a donc peut-etre pas termine
+delegate-budget-spent = apres avoir depense son budget de { $budget } jetons
+
+delegate-work = il a lance { $commands } et fait { $writes } { $place }
+delegate-work-commands = { $count ->
+    [one] { $count } commande
+   *[other] { $count } commandes
+    }
+delegate-work-writes = { $count ->
+    [one] { $count } ecriture
+   *[other] { $count } ecritures
+    }
+delegate-work-in-checkout = dans sa propre copie de travail
+delegate-work-in-project = dans le projet
+delegate-work-and-session = { $work } et { $session } dans le repertoire de la session
+
+delegate-checkout-removed-mark = sa copie de travail a ete supprimee
+delegate-checkout-kept-mark = sa copie de travail { $id } a ete gardee
+delegate-checkout-kept-size-mark = sa copie de travail { $id } a ete gardee, elle occupe { $size } sur le disque
+delegate-checkout-kept-size-partial-mark =
+    sa copie de travail { $id } a ete gardee, elle occupe au moins { $size } sur le disque
+delegate-checkout-stuck-mark = sa copie de travail n'a pas pu etre supprimee
+
+delegate-note-comma = { $note }, { $clause }
+delegate-note-semicolon = { $note } ; { $clause }
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = proposer ces outils au modèle ?

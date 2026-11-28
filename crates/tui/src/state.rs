@@ -4745,20 +4745,7 @@ impl Session {
 /// What a checkout takes on disk: whole kilobytes, rounded up, under a megabyte, megabytes under a
 /// gigabyte and gigabytes from there.
 fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
-    use bravebot_agent::git::checkout::Amount;
-    let tenths = |tenths: u64| {
-        format!(
-            "{}{}{}",
-            tenths / 10,
-            t!(number_decimal_separator),
-            tenths % 10
-        )
-    };
-    match size.amount() {
-        Amount::Kilobytes(kilobytes) => t!(kilobytes, size = kilobytes.to_string()),
-        Amount::Megabytes(megabytes) => t!(megabytes, size = tenths(megabytes)),
-        Amount::Gigabytes(gigabytes) => t!(gigabytes, size = tenths(gigabytes)),
-    }
+    size.said()
 }
 
 /// The most characters of a value a file supplied that one note shows.

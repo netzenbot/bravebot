@@ -448,7 +448,11 @@ category. None of it is text a service or a tool produced, so the entry holds no
 The entry keeps the category alone. Which part of a request a transport failure ended (the
 connection, the wait for the reply to begin, or the gap between two pieces of it) is said to the
 planner and in the person's note ([DELEGATE-26](delegation.md#DELEGATE-26)) and is not recorded.
-The note the person sees when the delegate finishes names the same cause. The planner is told only
+The note the person sees when the delegate finishes names the same cause. The words that say how
+the delegate ended, which part of the request ended, the round limit it reached, the token budget,
+what it ran and wrote, what became of its checkout, and the punctuation that joins these parts are
+read from the catalog the person chose ([LOCALE-1](localization.md#LOCALE-1)). The planner's message beside them
+is written in the source and is the same in every language. The planner is told only
 that the delegate did not finish, except for a rate-limited, unavailable, transport or incomplete
 ending, which it is told by name and with the sentence that starting the same delegate again meets
 the same limit, silence or stop
@@ -463,6 +467,8 @@ for a different response: raise the bound, retry, or nothing.
 `verified-by: bravebot_agent::turn::a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note`
 `verified-by: bravebot_agent::turn::a_stopped_delegate_and_a_lost_one_are_each_recorded_as_what_they_were`
 `verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_answer_names_why_it_ended`
+`verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_finish_is_said_in_the_chosen_catalog`
+`verified-by: bravebot_agent::turn::delegate_end::the_rest_of_a_delegate_s_note_is_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::turn::a_delegate_that_ended_on_a_limit_an_outage_a_silence_or_a_stopped_reply_is_told_to_the_planner`
 
 <a id="TRACE-9"></a>

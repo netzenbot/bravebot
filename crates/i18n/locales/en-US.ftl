@@ -2150,6 +2150,79 @@ delegate-rounds-narration = { $rounds ->
    *[other] that is { $rounds } rounds of tool calls without an answer, so this turn has to finish with what it has
     }
 
+# The note a person reads under a delegate that ended without handing a report back. The first
+# four say how it ended: the closed name of the failure (`why`, such as `unavailable`, which is
+# an identifier and stays as written), which part of the request ended where that is known, a stop
+# a person asked for, and a run that left no record of how it ended.
+delegate-unfinished = the delegate could not finish
+delegate-unfinished-why = the delegate could not finish ({ $why })
+delegate-unfinished-why-cause = the delegate could not finish ({ $why }: { $cause })
+delegate-stopped = the delegate was stopped
+
+# Which part of a request ended, said after the failure's name in the note above.
+delegate-cause-connection = the connection failed
+delegate-cause-begin = the reply did not begin
+delegate-cause-idle-gap = the reply went quiet
+
+# Added to the note above where the delegate had made as many rounds as its limit allowed. `note`
+# is the note above and `rounds` is the limit, a count of rounds.
+delegate-unfinished-at-limit = { $rounds ->
+    [one] { $note }, having spent its limit of { $rounds } round
+   *[other] { $note }, having spent its limit of { $rounds } rounds
+    }
+
+# The rest of what the person reads under a delegate that has ended, whether or not it handed a
+# report back. The first three say how a delegate that answered ended, from the kind of delegate
+# (`kind`, such as `reader`, which is an identifier and stays as written) and the rounds it made.
+delegate-answered-stopped = { $rounds ->
+    [one] the person stopped a { $kind } delegate after { $rounds } round and it answered with what it had
+   *[other] the person stopped a { $kind } delegate after { $rounds } rounds and it answered with what it had
+    }
+delegate-answered-at-limit = { $rounds ->
+    [one] a { $kind } delegate reached its limit of { $rounds } round and answered with what it had, so it may not be finished
+   *[other] a { $kind } delegate reached its limit of { $rounds } rounds and answered with what it had, so it may not be finished
+    }
+delegate-answered = { $rounds ->
+    [one] a { $kind } delegate answered after { $rounds } round
+   *[other] a { $kind } delegate answered after { $rounds } rounds
+    }
+
+# Added to the note where the delegate spent the token budget its definition or the call set. The
+# first is for a delegate that answered, the second for one that did not. The figure is a count of
+# tokens.
+delegate-budget-answered = it spent its budget of { $budget } tokens, so it may not be finished
+delegate-budget-spent = having spent its budget of { $budget } tokens
+
+# What the delegate did. `commands` and `writes` are the two counts below, `place` is one of the
+# two places after them, and `work` in the last is the sentence made of those, to which the number
+# of writes that landed in the session's own directory is added.
+delegate-work = it ran { $commands } and made { $writes } { $place }
+delegate-work-commands = { $count ->
+    [one] { $count } command
+   *[other] { $count } commands
+    }
+delegate-work-writes = { $count ->
+    [one] { $count } write
+   *[other] { $count } writes
+    }
+delegate-work-in-checkout = in its own checkout
+delegate-work-in-project = in the project
+delegate-work-and-session = { $work } and { $session } in the session directory
+
+# What the note says of the checkout a delegate worked in once it ended. The size is a number of
+# kilobytes, megabytes or gigabytes, and is a lower bound in the partial one.
+delegate-checkout-removed-mark = its checkout was removed
+delegate-checkout-kept-mark = its checkout { $id } was kept
+delegate-checkout-kept-size-mark = its checkout { $id } was kept, taking { $size } on disk
+delegate-checkout-kept-size-partial-mark =
+    its checkout { $id } was kept, taking at least { $size } on disk
+delegate-checkout-stuck-mark = its checkout could not be removed
+
+# How the parts of the note are joined: a clause after the note, and a part after what the note
+# already says. Each language writes its own punctuation and spacing.
+delegate-note-comma = { $note }, { $clause }
+delegate-note-semicolon = { $note }; { $clause }
+
 ## The tools an MCP server offers, read by the person before any of them is offered to the model
 
 mcp-tools-title = offer these tools to the model?

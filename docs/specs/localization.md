@@ -41,6 +41,8 @@ that reaches a request is not.
 
 `verified-by: bravebot_agent::audience::what_the_planner_reads_is_not_taken_from_a_catalog`
 `verified-by: bravebot_agent::audience::a_lookup_is_recognised_however_it_is_written`
+`verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_finish_is_said_in_the_chosen_catalog`
+`verified-by: bravebot_agent::turn::delegate_end::the_rest_of_a_delegate_s_note_is_said_in_the_chosen_catalog`
 
 <a id="LOCALE-2"></a>
 ### LOCALE-2: a message is chosen by a name written in the source, never by a value
@@ -105,6 +107,8 @@ no review in English will catch.
 `verified-by: bravebot_i18n::generate::a_message_a_translation_omits_is_pluralised_by_the_language_it_is_written_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_has_is_pluralised_by_that_translation_s_rules`
 `verified-by: bravebot_i18n::generate::a_select_in_a_language_with_no_plural_rule_is_found`
+`verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_finish_is_said_in_the_chosen_catalog`
+`verified-by: bravebot_agent::turn::delegate_end::the_rest_of_a_delegate_s_note_is_said_in_the_chosen_catalog`
 
 <a id="LOCALE-6"></a>
 ### LOCALE-6: no catalog is read while the agent is running

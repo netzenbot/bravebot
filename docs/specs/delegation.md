@@ -345,7 +345,12 @@ report.
 
 A delegate that spent its whole budget and then did not answer at all is told of in the same terms.
 There is no report to sit beside, so the sentence says the limit was spent and that the same task
-will not get further; the person's note gains the bound the same way. What the failure was stays the
+will not get further; the person's note gains the bound the same way, in the catalog's words and
+with the catalog's plural for the count ([LOCALE-5](localization.md#LOCALE-5)). Every other
+sentence of the person's note, for a delegate that answered and one that did not (how it ended,
+the token budget, what it ran and wrote, what became of its checkout, and the punctuation that
+joins the parts), is read from the catalog in the same way, and the planner's sentences beside them
+stay in the source. What the failure was stays the
 fixed category, said to the planner only for a limit, an outage, a silence or a stopped reply as below
 ([BACKEND-37](backends.md#BACKEND-37)): the bound is two counts this driver holds, not a reason
 read off a service's answer.
@@ -372,7 +377,8 @@ ended: the connection could not be made or failed, the reply did not begin withi
 given, or the reply went quiet for longer than the gap allowed. One that ended on the connection is
 not told to split the task, because smaller replies do not help a connection that failed. An
 incomplete ending whose reply began and then went quiet past the gap says so. The person's note
-names the same cause beside the category. The sentence is written by this driver for each of the four
+names the same cause beside the category, with one catalog message for each cause so that no
+message name is computed ([LOCALE-2](localization.md#LOCALE-2)). The planner's sentence is written by this driver for each of the four
 categories from the closed name the trail records ([TRACE-8](trace.md#TRACE-8)), and for each cause
 from the closed name the network layer chose from the kind of error the transport raised, so nothing the
 service answered is carried ([BACKEND-37](backends.md#BACKEND-37)). Every other category, a stop and
@@ -399,6 +405,8 @@ untrusted bytes ([LABEL-5](labels.md#LABEL-5)).
 `verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_the_category_only_where_a_repeat_ends_the_same_way`
 `verified-by: bravebot_agent::turn::delegate_end::the_planner_is_told_which_part_of_a_request_a_delegate_s_transport_failure_ended`
 `verified-by: bravebot_agent::turn::delegate_end::how_a_delegate_ended_carries_the_cause_of_a_transport_failure`
+`verified-by: bravebot_agent::turn::delegate_end::the_note_for_a_delegate_that_did_not_finish_is_said_in_the_chosen_catalog`
+`verified-by: bravebot_agent::turn::delegate_end::the_rest_of_a_delegate_s_note_is_said_in_the_chosen_catalog`
 
 <a id="DELEGATE-29"></a>
 ### DELEGATE-29: a delegate may also be bounded in tokens, by its definition or its call, and the call can only lower it
