@@ -16819,16 +16819,23 @@ done
 #[cfg(unix)]
 fn a_gateway_asking_about_a_symbol() -> Gateway {
     a_gateway(r#"["tools"]"#, |body| {
-        let frame = match body.contains(r#""role":"tool""#) {
-            true => serde_json::json!({"model":"reasons-only","choices":[{
-                "index":0,"delta":{"role":"assistant","content":"all done"},
-                "finish_reason":"stop"}]}),
-            false => serde_json::json!({"model":"reasons-only","choices":[{
+        // `lsp` is held back for `load_tool`, so the model loads it, then asks, then is done.
+        let frame = match body.matches(r#""role":"tool""#).count() {
+            0 => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-0","type":"function","function":{
+                        "name":"load_tool",
+                        "arguments":"{\"name\":\"lsp\",\"why\":\"to find a definition\"}"}}]},
+                "finish_reason":"tool_calls"}]}),
+            1 => serde_json::json!({"model":"reasons-only","choices":[{
                 "index":0,"delta":{"role":"assistant","tool_calls":[{
                     "index":0,"id":"call-1","type":"function","function":{
                         "name":"lsp",
                         "arguments":"{\"operation\":\"goToDefinition\",\"path\":\"src/a.rs\",\"line\":1,\"character\":12}"}}]},
                 "finish_reason":"tool_calls"}]}),
+            _ => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
         };
         let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
         format!(
@@ -16891,6 +16898,10 @@ fn a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_of
             .asked
             .recv_timeout(Duration::from_secs(60))
             .expect("the run reached the gateway");
+        let _loaded = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the planner was sent the result of loading lsp");
         let answered = gateway
             .asked
             .recv_timeout(Duration::from_secs(60))
