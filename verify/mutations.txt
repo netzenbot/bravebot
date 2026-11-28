@@ -925,3 +925,31 @@ replace: if line_start > len || offset > len - line_start { => if line_start > l
 mutation: excerpt::ends_by asks only whether a character starts before the byte, so a character the byte falls inside is counted as ended
 file: crates/core/src/excerpt.rs
 replace: width <= byte && at <= byte - width => at <= byte
+
+mutation: normalise keeps a `.` segment, so `src/./a.md` is a rule apart from `src/a.md` and spells past it
+file: crates/core/src/trust.rs
+replace: let dot = segment.len() == 1 && segment[0] == '.'; => let dot = false;
+
+mutation: normalise keeps an empty segment, so `src//a.md` is a rule apart from `src/a.md` and spells past it
+file: crates/core/src/trust.rs
+replace: !segment.is_empty() && !dot => !dot
+
+mutation: normalise drops the leading slash of an absolute path, so it is keyed as a name under the working directory
+file: crates/core/src/trust.rs
+replace: let absolute = !chars.is_empty() && chars[0] == '/'; => let absolute = false;
+
+mutation: normalise joins two segments with no separator, so `a/bc` and `ab/c` are one rule
+file: crates/core/src/trust.rs
+replace: let after_a_segment = wrote; => let after_a_segment = false;
+
+mutation: tail_beneath counts every byte of a segment as one, so a rule copied under another directory lands at a shorter path than it had
+file: crates/core/src/trust.rs
+replace: let ends_a_segment = key[at] == '/'; => let ends_a_segment = true;
+
+mutation: tail_beneath keeps the leading slash of a key, so a rule copied under another directory lands at `to//tail`
+file: crates/core/src/trust.rs
+replace: while at < key.len() && key[at] == '/' { => while false {
+
+mutation: segments_in counts every character as a segment, so tail_beneath skips more of a key than the prefix covers
+file: crates/core/src/trust.rs
+replace: in_segment = true; => in_segment = false;
